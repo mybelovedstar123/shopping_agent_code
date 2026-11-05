@@ -1668,3 +1668,55 @@ class Kyo:
                         if isinstance(inner, str) and len(inner.split()) >= 6:
                             lines.append(inner)
         return [line for line in lines if line not in self.heard]
+
+    def take_note(self, lines: list[str]) -> str:
+        self.heard.update(lines)
+        prompt = NOTE + '\n\nITEMS AND REQUIREMENTS NOW:\n' + self.ledger() + '\n\nTHE NOTE:\n' + '\n'.join(lines)
+        got = self.ask_json(prompt, [LIGHT, SPARE], 2500) or {}
+        gone = [str(g) for g in _items(got.get('gone')) if isinstance(g, (str, int))]
+        self.unavailable.update((g for g in gone if g in self.rows))
+        self.note_sold = bool(gone) or got.get('sold_out') is True
+        self.note_named = any((g in self.rows for g in gone))
+        if self.note_sold and len(lines) == 1:
+            self.sold_lines.update(lines)
+        if got.get('kind') not in (None, 'change'):
+            return ''
+        changed = []
+        budget = got.get('budget')
+        if isinstance(budget, (int, float)) and (not isinstance(budget, bool)) and (budget > 0) and (budget != self.budget):
+            self.budget = budget
+            changed.append(f'budget now {budget}')
+        added: set[str] = set()
+        drops = [e for e in _items(got.get('drop')) if isinstance(e, dict) and str(e.get('need') or '').strip()]
+        adds = [e for e in _items(got.get('add')) if isinstance(e, dict) and str(e.get('need') or '').strip()]
+        for entry in drops:
+            item = self.items[min(max(1, _count(entry.get('item')) or 1), len(self.items)) - 1]
+            target = str(entry['need']).strip()
+            live = [m for m in item.musts + item.told if m not in item.dropped]
+            hit = [m for m in live if m == target]
+            if not hit:
+                hit = [m for m in live if _words(m.split(':')[0]) == _words(target.split(':')[0])][:1]
+            item.dropped.extend(hit or [target])
+            changed.append(f'dropped {target}')
+        for entry in adds:
+            item = self.items[min(max(1, _count(entry.get('item')) or 1), len(self.items)) - 1]
+            need = str(entry['need']).strip()
+            if need in item.dropped:
+                item.dropped.remove(need)
+            if need not in item.musts + item.told:
+                item.told.append(need)
+            added.add(need)
+            changed.append(f'added {need}')
+        if gone:
+            changed.append('unavailable: ' + ', '.join(gone))
+        if got.get('price_moved') is True:
+            changed.append('a price changed')
+        summary = str(got.get('summary') or '').strip()
+        if self.brief.get('pick') == 'cheapest' and (drops or gone or self.note_sold or any((c.startswith('budget now') for c in changed))):
+            self.wider_held = False
+            self.cheaper_marks = set()
+        if changed or summary:
+            self.version += 1
+            self.recent = []
+            self.notes.append(summary or '; '.join(changed))
+        return (summary + (' (' + '; '.join(changed) + ')' if changed else '')).strip()
