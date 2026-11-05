@@ -1833,3 +1833,48 @@ class Kyo:
         cat_key = self.category_key()
         item = self.items[number - 1]
         return [i for i in self.seen_order if cat_key and self.owns(item, str((self.rows.get(i) or {}).get(cat_key) or ''))]
+
+    def fit_faults(self) -> list[str]:
+        if not self.bound:
+            return []
+        index = self.fit_index()
+        cart = self.cart_ids()
+        faults = []
+        for part, main in self.bound:
+            devices = [i for i in cart if i in self.item_ids(main)]
+            parts = [i for i in cart if i in self.item_ids(part)]
+            if len(devices) != 1 or not parts:
+                continue
+            codes = set(index['marks'].get(devices[0], {}).get('codes') or [])
+            if not codes:
+                continue
+            for line in parts:
+                fits = self.fit_set(line, index)
+                if fits and (not fits & codes):
+                    good = [i for i in self.item_ids(part) if self.fit_set(i, index) & codes and (not self.sold_out(i)) and (i not in cart)][:4]
+                    faults.append(f"{line} ({self.items[part - 1].name}) works with {', '.join(sorted(fits)[:4])}, not with {devices[0]} ({', '.join(sorted(codes))})" + (f"; seen parts of that kind that work with it: {', '.join(good)}" if good else '; no seen part of that kind works with it, so look for one or switch the device: ' + self.fit_plan(short=True)))
+        return faults
+
+    def fit_plan(self, short: bool=False) -> str:
+        if not self.bound:
+            return ''
+        index = self.fit_index()
+        lines = []
+        for main in sorted({m for _, m in self.bound}):
+            parts = [p for p, m in self.bound if m == main]
+            tally: dict[str, dict[int, int]] = {}
+            for p in parts:
+                for i in self.item_ids(p):
+                    if self.sold_out(i):
+                        continue
+                    for code in self.fit_set(i, index):
+                        tally.setdefault(code, {}).setdefault(p, 0)
+                        tally[code][p] += 1
+            ranked = sorted(tally.items(), key=lambda kv: (-len(kv[1]), -sum(kv[1].values())))[:4]
+            devices = {code: [i for i in self.item_ids(main) if code in (index['marks'].get(i, {}).get('codes') or [])][:2] for code, _ in ranked}
+            text = '; '.join((f'{code}: ' + ', '.join((f'{n} {self.items[p - 1].name}' for p, n in sorted(per.items()))) + (f" (device seen: {', '.join(devices[code])})" if devices[code] else ' (device not seen yet)') for code, per in ranked))
+            if text:
+                lines.append(f"codes the {self.items[main - 1].name} candidates' parts name -> {text}")
+        if not lines:
+            return ''
+        return ' | '.join(lines) if short else "[fit plan: a device fits a part when the part's text names the device's model code or another name it is sold as; codes are not searchable, so list the device's category and read the codes on its rows] " + ' | '.join(lines)
