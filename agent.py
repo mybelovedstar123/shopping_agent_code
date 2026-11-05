@@ -2409,3 +2409,608 @@ class Kyo:
         if not replies:
             return ''
         return 'Not run (Kyo acted instead): the independent check confirmed ' + self.confirmed + ', so Kyo set the cart (' + '; '.join(done) + ') and checked out. Store reply: ' + ' | then: '.join(replies)
+
+    def is_buy(self, name: str, args: dict[str, Any]) -> bool:
+        if name != self.roles.get('buy'):
+            return False
+        fixed = self.brief.get('buy_args') if isinstance(self.brief.get('buy_args'), dict) else {}
+        return all((args.get(k) == v for k, v in fixed.items()))
+
+    def is_refuse(self, name: str, args: dict[str, Any]) -> bool:
+        if name != self.roles.get('refuse'):
+            return False
+        fixed = self.brief.get('refuse_args') if isinstance(self.brief.get('refuse_args'), dict) else {}
+        return all((args.get(k) == v for k, v in fixed.items()))
+
+    def offered(self) -> list[dict[str, Any]]:
+        left = self.left()
+        ask = self.roles.get('ask')
+        keep: set[str] | None = None
+        ends = {self.roles.get('buy'), self.roles.get('refuse')} - {None}
+        if left <= self.tail():
+            keep = set(ends)
+        elif left <= self.tail() + 3:
+            keep = set(ends) | {self.roles.get('cart'), self.roles.get('cart_view')}
+        elif left <= len(self.items) + 5 and self.buys == 0:
+            keep = set(ends) | {self.roles.get('cart'), self.roles.get('cart_view'), self.roles.get('offer')}
+        tools = [t for t in self.tools if t['function']['name'] != ask]
+        if keep is not None and ends:
+            narrowed = [t for t in tools if t['function']['name'] in keep]
+            tools = narrowed or tools
+        return tools
+
+    def quiet(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+        schema = self.schemas.get(name) or {}
+        props = schema.get('properties') or {}
+        out = dict(args)
+        for key, spec in props.items():
+            if not isinstance(spec, dict) or 'string' not in _kinds(spec) or 'enum' in spec:
+                continue
+            value = out.get(key)
+            if value is None and key not in (schema.get('required') or []):
+                continue
+            text = str(value or '')
+            named = any((ident in text for ident in self.rows)) or self.brief.get('quiet_decline') is not False
+            if named or not text:
+                out[key] = 'Sorry, nothing in the store meets all of your requirements, so I am not buying anything.'[:spec.get('maxLength', 200)]
+        return out
+
+    def resolve_ids(self, name: str, args: dict[str, Any]) -> tuple[dict[str, Any], str]:
+        if name not in {self.roles.get(r) for r in ('cart', 'open', 'offer', 'compare')} - {None} or not self.id_key:
+            return (args, '')
+        props = (self.schemas.get(name) or {}).get('properties') or {}
+        free = [k for k, v in props.items() if isinstance(v, dict) and ('string' in _kinds(v) or 'array' in _kinds(v)) and ('enum' not in v)]
+        if len(free) != 1 or (name != self.roles.get('cart') and (name, free[0]) not in self.id_args):
+            return (args, '')
+
+        def fix(value: Any) -> tuple[Any, str]:
+            if isinstance(value, str) and value.strip() in self.rows:
+                return (value.strip(), '')
+            if not isinstance(value, str) or _id_like(value, True) or len(value.strip()) < 8:
+                return (value, '')
+            low = value.strip().lower()
+            hits = [i for i, row in self.rows.items() if any((k != self.id_key and isinstance(v, str) and v.strip().lower().startswith(low) for k, v in row.items()))]
+            if len(hits) == 1:
+                return (hits[0], '')
+            if hits:
+                return (value, f"several listings carry the text {value!r} ({', '.join(hits[:6])}); pass one listing id")
+            return (value, f'{value!r} is not a listing id; pass the id from the result rows (their {self.id_key} field)')
+        out = dict(args)
+        for key in free:
+            if key not in args:
+                continue
+            fixed = [fix(v) for v in args[key]] if isinstance(args[key], list) else [fix(args[key])]
+            problem = next((p for _, p in fixed if p), '')
+            if problem:
+                return (args, problem)
+            out[key] = [v for v, _ in fixed] if isinstance(args[key], list) else fixed[0][0]
+        return (out, '')
+
+    def cart_sets(self, name: str) -> bool:
+        props = self.schemas.get(name, {}).get('properties') or {}
+        if any((isinstance(s, dict) and isinstance(s.get('enum'), list) and (len(s['enum']) >= 2) for s in props.values())):
+            return False
+        return any((isinstance(s, dict) and 'integer' in _kinds(s) and (s.get('minimum') == 0) for s in props.values()))
+
+    def note_cart(self, name: str, args: dict[str, Any]) -> None:
+        self.cart_touched = True
+        self.cart_at = self.step
+        spec = self.schemas.get(name, {}).get('properties') or {}
+        removal = False
+        for key, value in args.items():
+            options = (spec.get(key) or {}).get('enum')
+            if isinstance(options, list) and len(options) >= 2 and (value in options[1:]):
+                removal = True
+        loose_count = next((_count(v) for v in args.values() if _count(v) is not None and (not isinstance(v, str))), None)
+        lines: list[tuple[str, int | None]] = []
+        whole = False
+        for key, value in args.items():
+            if isinstance(value, list):
+                shape = (spec.get(key) or {}).get('items') or {}
+                if not value and isinstance(shape, dict) and (shape.get('type') == 'object' or 'properties' in shape):
+                    whole = True
+                for line in value:
+                    if isinstance(line, dict):
+                        whole = True
+                        ident = next((v for v in line.values() if isinstance(v, str) and v in self.rows), None)
+                        count = next((_count(v) for v in line.values() if _count(v) is not None and (not isinstance(v, str))), 1)
+                        if ident:
+                            lines.append((ident, count))
+                    elif isinstance(line, str) and line in self.rows:
+                        lines.append((line, loose_count))
+            elif isinstance(value, str) and value in self.rows:
+                lines.append((value, loose_count))
+        if whole:
+            self.cart_lines = {i: c for i, c in lines if c and c > 0}
+            return
+        sets = self.cart_sets(name)
+        for ident, count in lines:
+            have = self.cart_lines.get(ident, 0)
+            if removal:
+                have = have - count if count else 0
+            elif sets:
+                have = count if count is not None else 1
+            else:
+                have = have + (count if count is not None else 1)
+            if have > 0:
+                self.cart_lines[ident] = have
+            else:
+                self.cart_lines.pop(ident, None)
+
+    def show(self, observation: Any) -> str:
+        text = _dump(_clip(observation, SHOW_CHARS))
+        if len(text) > OBS_LIMIT:
+            text = text[:OBS_LIMIT] + '...(cut)'
+        return text
+
+    def compare_target(self) -> str | None:
+        schema = self.schemas.get(self.roles.get('compare') or '') or {}
+        props = schema.get('properties') or {}
+        target = next((k for k, v in props.items() if isinstance(v, dict) and 'array' in _kinds(v)), None)
+        if not target or any((k != target for k in schema.get('required') or [])):
+            return None
+        return target
+
+    def compare_room(self) -> int:
+        spec = ((self.schemas.get(self.roles.get('compare') or '') or {}).get('properties') or {}).get(self.compare_target() or '') or {}
+        if isinstance(spec.get('maxItems'), int):
+            return spec['maxItems']
+        if self.compare_bad:
+            return max(2, min(self.compare_bad - 1, max(self.compare_ok, 2)))
+        return max(4, self.compare_ok)
+
+    def join_opens(self, calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        opener, joiner, target = (self.roles.get('open'), self.roles.get('compare'), self.single_target(self.roles.get('open')))
+        many = self.compare_target()
+        if not opener or not joiner or (not target) or (not many) or (opener == joiner):
+            return calls
+        if self.compare_bare():
+            return calls
+        picks: list[tuple[int, str]] = []
+        for index, call in enumerate(calls):
+            fn = call.get('function') or {}
+            args = _json_obj(fn.get('arguments')) if isinstance(fn.get('arguments'), str) else None
+            ident = str((args or {}).get(target) or '').strip()
+            if fn.get('name') == opener and args and (set(args) == {target}) and (ident in self.rows) and (ident not in self.gone):
+                picks.append((index, ident))
+        picks = picks[:self.compare_room()]
+        if len(picks) < 2:
+            return calls
+        first = picks[0][0]
+        out = []
+        for index, call in enumerate(calls):
+            if index == first:
+                out.append({'id': call['id'], 'type': 'function', 'function': {'name': joiner, 'arguments': _dump({many: [i for _, i in picks]})}})
+            elif index in {i for i, _ in picks}:
+                out.append({'id': call['id'], 'joined': True})
+            else:
+                out.append(call)
+        self.trace.append({'kind': 'joined', 'ids': [i for _, i in picks]})
+        return out
+
+    def run_calls(self, calls: list[dict[str, Any]]) -> list[tuple[str, str]]:
+        out: list[tuple[str, str]] = []
+        calls = self.join_opens(calls)
+        for index, call in enumerate(calls):
+            allowed = {t['function']['name'] for t in self.offered()}
+            cid = call['id']
+            if call.get('joined'):
+                out.append((cid, 'Shown in the side-by-side result above: Kyo opened these listings together in one step.'))
+                continue
+            fn = call.get('function') or {}
+            name = fn.get('name')
+            raw = fn.get('arguments')
+            if self.finished:
+                out.append((cid, 'Not run: the episode is over.'))
+                continue
+            if name == self.roles.get('ask'):
+                out.append((cid, "Not run (no step used): Kyo's interviewer handles every message to the shopper."))
+                continue
+            if name not in self.schemas:
+                out.append((cid, f"Not run (no step used): unknown tool. Tools: {', '.join(sorted(allowed))}."))
+                continue
+            if name not in allowed:
+                out.append((cid, 'Not run (no step used): too few steps are left for that; use: ' + ', '.join(sorted(allowed)) + '.'))
+                continue
+            if isinstance(raw, dict):
+                args = raw
+            else:
+                args = _json_obj(raw) if (raw or '').strip() else {}
+                if args is None:
+                    out.append((cid, 'Not run (no step used): the arguments were not one JSON object.'))
+                    continue
+            faults: list[str] = []
+            args = _shape(args, self.schemas[name], 'args', faults)
+            if faults:
+                out.append((cid, 'Not run (no step used): ' + '; '.join(faults[:6])))
+                continue
+            args, wrong = self.resolve_ids(name, args)
+            if wrong:
+                out.append((cid, 'Not run (no step used): ' + wrong + '.'))
+                continue
+            trimmed = ''
+            many = self.compare_target() if name == self.roles.get('compare') else None
+            if many and isinstance(args.get(many), list) and (len(args[many]) > self.compare_room()) and self.compare_bad:
+                room = self.compare_room()
+                trimmed = f"\n[Kyo] Sent the first {room} listings only: this store shows at most {room} side by side. Not shown yet: {', '.join(map(str, args[many][room:]))}."
+                args = {**args, many: args[many][:room]}
+            target = self.single_target(name)
+            if target and name in (self.roles.get('open'), self.roles.get('offer')) and (str(args.get(target)) in self.gone):
+                out.append((cid, f'Not run (no step used): {args[target]} sold out at step {self.gone[str(args[target])]} and will not come back. Replace its cart line with another fitting listing.'))
+                continue
+            if name == self.roles.get('cart') and any(((_count(v) or 0) < 0 for v in args.values() if not isinstance(v, str))):
+                view = _dump(self.cart_view) if self.cart_seen_at >= self.cart_at else ''
+                absent = [v for v in args.values() if isinstance(v, str) and v in self.rows and (v not in self.cart_lines) and (v not in view) and (v not in self.cart_said)]
+                if absent:
+                    out.append((cid, f'Not run (no step used): {absent[0]} is not in the cart, so there is nothing to take off. Cart now: ' + self.cart_text()))
+                    continue
+            ending = self.is_buy(name, args) or self.is_refuse(name, args)
+            if ending and len(calls) > 1:
+                out.append((cid, 'Not run (no step used): send the finishing call on its own, after reading your other results.'))
+                continue
+            if not ending and self.left() <= self.tail() and (self.roles.get('buy') or self.roles.get('refuse')):
+                out.append((cid, "Not run (no step used): the last steps are kept for checking out (with the shopper's approval of the basket when it is due) or ending without a purchase."))
+                continue
+            mark = name + _dump(args)
+            if not ending and name != self.roles.get('cart') and (mark in self.recent):
+                out.append((cid, 'Not run (no step used): you just made this same call and nothing changed; its result is above.'))
+                continue
+            readers = {self.roles.get(r) for r in ('search', 'open', 'offer', 'compare')} - {None}
+            cached = self.read_cache.get(mark)
+            if name in readers and cached and (cached[0] == self.version):
+                out.append((cid, f'Not run (no step used): the same call at step {cached[1]} returned this, and nothing has changed since:\n' + cached[2][:3000]))
+                continue
+            if target and name in readers and (name != self.roles.get('compare')) and self.shown_already(name, str(args.get(target))):
+                out.append((cid, f'Not run (no step used): {args[target]} has shown everything this view gives since the last change. Its record: ' + self.record_of(str(args[target]))))
+                continue
+            if many and isinstance(args.get(many), list) and args[many]:
+                keep = [i for i in args[many] if not self.shown_already(name, str(i))]
+                if not keep:
+                    out.append((cid, 'Not run (no step used): these listings have shown everything this view gives since the last change. Their records:\n' + '\n'.join((f'{i}: {self.record_of(str(i))}' for i in args[many]))[:4000]))
+                    continue
+                if len(keep) < len(args[many]):
+                    trimmed += f"\n[Kyo] Left out {', '.join((str(i) for i in args[many] if i not in keep))}: shown in full already, nothing changed since."
+                    args = {**args, many: keep}
+                    mark = name + _dump(args)
+            if ending and self.left() > 2:
+                if self.is_buy(name, args):
+                    wider = self.wider_hold()
+                    if wider:
+                        out.append((cid, wider + '\nCart now: ' + self.cart_text()))
+                        continue
+                    reread = self.reread_offers()
+                    if self.note_sold:
+                        self.find_sold()
+                    if self.cart_touched and self.cart_seen_at < self.cart_at and self.roles.get('cart_view') and (self.left() > 3):
+                        faults = []
+                        view_args = _shape({}, self.schemas.get(self.roles['cart_view']), 'args', faults)
+                        view = self.act(self.roles['cart_view'], view_args) if not faults else None
+                        if view is not None:
+                            self.cart_view = view.get('observation')
+                            self.cart_seen_at = self.step
+                            change = self.observe(self.roles['cart_view'], self.cart_view)
+                            if change:
+                                self.queued = []
+                                out.append((cid, 'Not run yet (no step used). Looking at the cart showed a change: ' + change + '\nCart now: ' + self.cart_text() + '\nApply the change, fix the cart if needed, then check out.'))
+                                continue
+                    swap = self.swap_hint()
+                    held = [i for i in self.cart_ids() if i in self.gone] if self.held < 2 else []
+                    if swap or held:
+                        self.held += 0 if swap else 1
+                        out.append((cid, 'Not run yet (no step used). ' + (swap or f"{', '.join(held)} in the cart is sold out: replace that line first.") + '\nCart now: ' + self.cart_text()))
+                        continue
+                    chain, hold = self.trail()
+                    if hold:
+                        out.append((cid, 'Not run yet (no step used). ' + chain + '\nCart now: ' + self.cart_text()))
+                        continue
+                    misfit = self.fit_faults() if self.fit_holds < 2 and self.left() > self.tail() + 3 else []
+                    if misfit:
+                        self.fit_holds += 1
+                        self.trace.append({'kind': 'fit_hold', 'faults': misfit[:4]})
+                        out.append((cid, 'Not run yet (no step used). A part in the cart does not work with the device in the cart: ' + '; '.join(misfit[:3]) + '. Swap the part (or the device), then check out.\nCart now: ' + self.cart_text()))
+                        continue
+                    faults = self.line_faults() if self.line_holds < 2 and self.left() > self.tail() + 2 else []
+                    fixed = []
+                    if faults and all((' is held at ' in f for f in faults)):
+                        fixed = self.fix_counts(self.count_fixes())
+                        faults = self.line_faults() if fixed else faults
+                        if fixed and (not faults):
+                            self.line_holds += 1
+                            out.append((cid, "Not run yet (no step used). Kyo set the cart's quantities itself: " + '; '.join(fixed) + '. If the store refused any of these, fix those lines; then check out.\nCart now: ' + self.cart_text()))
+                            continue
+                    if faults:
+                        self.line_holds += 1
+                        self.trace.append({'kind': 'line_hold', 'faults': faults[:6]})
+                        out.append((cid, 'Not run yet (no step used). The cart does not match the request yet: ' + '; '.join(faults[:6]) + ". Fix those lines (the cart tool's own way to add or take off units), then check out.\nCart now: " + self.cart_text()))
+                        continue
+                    read = self.fill_facts(self.cart_ids(), self.tail() + 3) + self.cheaper_rows()
+                    verdict = self.check_cart()
+                    if verdict:
+                        seen = "Kyo read these listings' attributes for the check (one step each):\n" + '\n'.join(read) + '\n' if read else ''
+                        out.append((cid, 'Not run yet. ' + chain + seen + verdict + '\nCart now: ' + self.cart_text()))
+                        continue
+                    if reread and self.cost > SPEND_SOFT:
+                        out.append((cid, "Not run yet (no step used). Kyo re-read the cart's listings just now:\n" + reread + '\nCheck out again when every line still shows stock and a price inside the budget; otherwise replace that line first.'))
+                        continue
+                elif self.left() > 5:
+                    review = self.audit()
+                    if review:
+                        out.append((cid, 'Not run yet (no step used). ' + review))
+                        continue
+                    if self.leads and self.left() > 4 and (self.refuse_blocks == 0):
+                        self.refuse_blocks = 1
+                        self.trace.append({'kind': 'refuse_blocked', 'leads': list(self.leads)})
+                        out.append((cid, 'Not run yet (no step used). The review found listings that appear to fit: ' + ', '.join(self.leads) + '. Open them if needed, put the best fitting one in the cart (respecting the pick rule) and check out. End without a purchase only if each of them clearly fails a requirement; then say which one in your text and send the ending call again.'))
+                        continue
+                    if self.leads and self.left() > 4 and (self.refuse_blocks == 1):
+                        self.refuse_blocks = 2
+                        first = self.leads[0]
+                        self.check_cart([first], SPEND_HARD)
+                        if self.verdicts.get(self.check_key([first])) and first in self.leads:
+                            self.confirmed = first
+                            self.trace.append({'kind': 'refuse_blocked', 'confirmed': first})
+                            out.append((cid, f"Not run yet (no step used). An independent check of {first}'s records says it meets every requirement. Add it to the cart at the requested quantity and check out; end without a purchase only if its record clearly breaks a requirement."))
+                            continue
+            if self.is_refuse(name, args) and self.left() <= 5 and (not self.late_held):
+                lines = [i for i in self.built if not self.sold_out(i)]
+                fresh = self.cart_view is not None and self.cart_seen_at >= self.cart_at
+                missing = [i for i in lines if i not in self.cart_ids() or (i in self.dropped and (not fresh))]
+                if len(lines) >= len(self.items) and len(missing) + 1 <= self.left():
+                    self.late_held = True
+                    self.trace.append({'kind': 'late_decline_held', 'lines': lines, 'missing': missing})
+                    redo = f"Put {', '.join(missing)} back in the cart at the requested quantities, then check out." if missing else 'Check out the cart as it is.'
+                    out.append((cid, 'Not run yet (no step used). Ending without a purchase earns nothing when the store has a fitting listing, and running short of steps does not show that it has none. ' + redo + ' End without a purchase only if your search showed that some requested item has no listing that meets its requirements; then send the ending call again.'))
+                    continue
+            if self.is_refuse(name, args) and (not self.leads) and (not self.pushed) and (self.left() > self.max_steps // 3):
+                self.pushed = True
+                out.append((cid, f"Not run yet (no step used). {self.left()} steps are still left, so search in ways you have not tried before ending: browse the category of each requested item and page through it with the token or offset the store returns, try single-word value queries and the property's other names, and open the listings that might fit. End without a purchase only after that."))
+                continue
+            if self.is_refuse(name, args):
+                done = self.complete_cart()
+                if done:
+                    out.append((cid, done + (' [episode finished]' if self.finished else '')))
+                    continue
+                args = self.quiet(name, args)
+            if ending and self.left() >= 2:
+                go, said = self.gate('order' if self.is_buy(name, args) else 'end')
+                if not go:
+                    out.append((cid, 'Not run yet. ' + said + '\nCart now: ' + self.cart_text()))
+                    continue
+                if said:
+                    trimmed = '\n[Kyo] ' + said + trimmed
+            reply = self.act(name, args)
+            if reply is None:
+                out.append((cid, 'The call failed (network or server). You may try again.'))
+                continue
+            observation = reply.get('observation')
+            if many and isinstance(args.get(many), list) and (len(args[many]) > 1):
+                shown = _dump(observation)
+                if not any((str(i) in shown for i in args[many])):
+                    self.compare_bad = min(self.compare_bad or 999, len(args[many]))
+                    trimmed += f'\n[Kyo] The side-by-side view showed nothing for {len(args[many])} listings: send at most {self.compare_room()} per call.'
+                else:
+                    self.compare_ok = max(self.compare_ok, len(args[many]))
+            self.recent = (self.recent + [mark])[-3:]
+            self.id_args.update(((name, k) for k, v in args.items() if (v if isinstance(v, list) else [v]) and all((isinstance(x, str) and x in self.rows for x in (v if isinstance(v, list) else [v])))))
+            self.absorb(observation)
+            if name == self.roles.get('compare'):
+                rows = self.records_in(observation)
+                if rows:
+                    self.facts_from[name] = self.facts_from.get(name, False) or any((_fact_block(r) for _, r in rows))
+            if name in readers - {self.roles.get('search')}:
+                self.note_view(name, observation)
+            plain = {tool for job, tool in self.roles.items() if job != 'search'}
+            paged = self.more_pages(name, args, observation) if name not in plain and (not ending) else ''
+            if self.single_target(name) and name not in (self.roles.get('cart'), self.roles.get('buy'), self.roles.get('refuse'), self.roles.get('ask')):
+                listing = self.ident(observation) if isinstance(observation, dict) else None
+                if listing:
+                    self.facts_from[name] = self.facts_from.get(name, False) or bool(_fact_block(observation))
+                    if name == self.roles.get('open') and (not self.facts_from[name]):
+                        other = next((t for t in self.schemas if t != name and self.single_target(t) and (self.facts_from.get(t) is not False) and (t not in (self.roles.get('cart'), self.roles.get('buy'), self.roles.get('refuse'), self.roles.get('ask'), self.roles.get('search')))), None)
+                        if other:
+                            self.roles['open'] = other
+                    if not self.facts_from[name] and name != self.roles.get('open') and (not self.roles.get('offer')):
+                        self.roles['offer'] = name
+                    if name == self.offer_tool():
+                        self.offer_seen[listing] = self.step
+            if name == self.roles.get('cart'):
+                self.note_cart(name, args)
+                self.cart_said = _dump(observation)
+                self.recent = []
+                counts = [_count(v) for v in args.values() if not isinstance(v, str) and _count(v) is not None]
+                for value in args.values():
+                    if counts and isinstance(value, str) and (value in self.rows):
+                        if counts[0] <= 0 and (not _in_rows(observation, value)):
+                            self.dropped.add(value)
+                        elif counts[0] > 0:
+                            self.dropped.discard(value)
+                lines = [i for i in self.cart_ids() if not self.sold_out(i) and i not in self.dropped]
+                if len(lines) >= len(self.built):
+                    self.built = lines
+            if name == self.roles.get('search') and self.records_in(observation):
+                self.searched = (self.searched + [dict(args)])[-8:]
+            if name == self.roles.get('cart_view'):
+                self.cart_view = observation
+                self.cart_seen_at = self.step
+            if self.is_buy(name, args):
+                self.buys += 1
+                if not reply.get('finished'):
+                    self.refused_at = self.step
+            text = self.show(observation) + paged + trimmed
+            if name not in plain and (not ending):
+                text += self.cheapest_here([observation] + self.paged_obs) + self.cap_ignored(name, args, observation)
+            base = text
+            proof = self.evidence(observation)
+            if proof:
+                text += '\n' + proof
+            if name == self.roles.get('cart') and any((_count(v) == 0 for v in args.values() if not isinstance(v, str))):
+                if any((isinstance(v, str) and v in self.rows and _in_rows(observation, v) for v in args.values())):
+                    text += '\n[Kyo] A count of 0 left that line in the cart: this tool adds the count to the line, so a negative count takes units off.'
+            self.note_sold = False
+            lines = self.loose_lines(observation)
+            if lines:
+                meaning = self.take_note(lines)
+                if meaning:
+                    text += '\n[note read] ' + meaning + '. Apply this change to your picks before checking out.'
+            refused = self.is_buy(name, args) and (not reply.get('finished'))
+            again = refused and any((line in self.spoken(observation) for line in self.sold_lines))
+            loose = self.note_sold and (refused or (not self.note_named and (not self.is_buy(name, args))))
+            if (loose or again) and self.cart_ids() and (not self.finished):
+                seen = self.find_sold()
+                if seen:
+                    text += "\n[Kyo re-read the cart's lines after the refusal]\n" + seen
+            self.note_sold = False
+            swap = self.swap_hint()
+            if swap:
+                text += '\n' + swap
+            if self.queued:
+                text += "\n[notes seen on Kyo's own calls] " + ' | '.join(self.queued)
+                self.queued = []
+            if name in readers:
+                self.read_cache[mark] = (self.version, self.step, base)
+            if reply.get('finished'):
+                text += ' [episode finished]'
+            out.append((cid, text))
+        return out
+
+    def finish(self, again: bool=False) -> str:
+        if self.finished or self.broke or self.left() <= 0:
+            return ''
+        buy, refuse = (self.roles.get('buy'), self.roles.get('refuse'))
+        fresh = self.cart_view is not None and self.cart_seen_at >= self.cart_at
+        holding = bool(self.cart_ids()) if fresh else bool(self.cart_lines)
+        if buy and (holding or (self.cart_touched and (not fresh) and (self.left() >= 2))):
+            faults: list[str] = []
+            args = _shape(dict(self.brief.get('buy_args') or {}), self.schemas.get(buy), 'args', faults)
+            if not faults:
+                if self.left() >= 2:
+                    self.gate('order')
+                if self.finished or self.left() <= 0:
+                    return ''
+                reply = self.act(buy, args)
+                self.trace.append({'kind': 'forced_buy', 'reply': _clip(reply, 200)})
+                if self.finished or self.left() <= 0:
+                    return ''
+                if reply is not None and again:
+                    self.buys += 1
+                    self.refused_at = self.step
+                    self.observe(buy, reply.get('observation'))
+                    return 'the checkout was refused: ' + self.show(reply.get('observation'))
+        if refuse:
+            faults = []
+            args = _shape(self.quiet(refuse, dict(self.brief.get('refuse_args') or {})), self.schemas.get(refuse), 'args', faults)
+            if not faults:
+                if self.left() >= 2:
+                    self.gate('end')
+                if self.finished or self.left() <= 0:
+                    return ''
+                reply = self.act(refuse, args)
+                self.trace.append({'kind': 'forced_refuse', 'reply': _clip(reply, 200)})
+                if reply is not None and (not self.finished):
+                    self.observe(refuse, reply.get('observation'))
+                    return 'ending without a purchase was refused: ' + self.show(reply.get('observation'))
+        return ''
+
+    def trim(self) -> None:
+        size = sum((len(_dump(m.get('content'))) for m in self.chat))
+        if size <= HISTORY_LIMIT:
+            return
+        tools = [i for i, m in enumerate(self.chat) if m.get('role') == 'tool']
+        for index in tools[:max(1, len(tools) // 2)]:
+            content = self.chat[index].get('content') or ''
+            if len(content) > 600:
+                ids = re.findall('"([A-Za-z0-9][A-Za-z0-9_\\-:.]{5,40})"', content)
+                ids = [i for i in dict.fromkeys(ids) if i in self.rows][:20]
+                self.chat[index]['content'] = content[:400] + f"...(older result shortened; listings in it: {', '.join(ids)})"
+
+    def run(self) -> list[dict[str, Any]]:
+        if self.finished:
+            return self.trace
+        self.read_request()
+        self.trace.append({'kind': 'brief', 'brief': self.brief})
+        opening = self.view.get('opening')
+        if opening is not None:
+            self.absorb(opening)
+        intro = "SHOPPER'S REQUEST:\n" + self.request
+        if opening is not None:
+            intro += '\n\nWHAT THE STORE SHOWS FIRST:\n' + self.show(opening)
+        intro += '\n\nStart by searching for each item in its category and opening several listings in full, so the interviewer can see which properties these listings carry.\n\n' + self.status()
+        self.chat = [{'role': 'system', 'content': GUIDE}, {'role': 'user', 'content': intro}]
+        self.work(LOOP_CALLS, SPEND_HARD)
+        if not self.finished:
+            turned = self.finish(again=True)
+            if turned and (not self.finished) and (not self.broke) and (not self.no_credit) and (self.left() > 1):
+                self.chat.append({'role': 'user', 'content': '[Kyo] Kyo tried to end the episode and ' + turned + '\nApply what the store says, then finish.\n' + self.status()})
+                self.work(self.loop_calls + 10, SPEND_HARD + 0.01)
+            if not self.finished:
+                self.finish()
+        self.trace.append({'kind': 'end', 'finished': self.finished, 'steps': self.step, 'cost': round(self.cost, 5), 'calls': self.calls})
+        return self.trace
+
+    def work(self, loop_cap: int, spend_cap: float) -> None:
+        idle = 0
+        while not self.finished and (not self.broke) and (self.left() > 0) and (self.loop_calls < loop_cap) and (self.cost < spend_cap):
+            if self.ready_to_ask():
+                summary = self.interview()
+                if summary:
+                    self.chat.append({'role': 'user', 'content': summary + '\n' + self.status()})
+                continue
+            self.trim()
+            self.loop_calls += 1
+            message = self.think(self.chat, [LIGHT, SPARE], 3000, self.offered())
+            if message is None:
+                self.misses += 1
+                if self.no_credit or self.calls >= ALL_CALLS or self.misses > 2:
+                    break
+                continue
+            calls = []
+            for number, call in enumerate(message.get('tool_calls') or []):
+                if not isinstance(call, dict):
+                    continue
+                fn = call.get('function') if isinstance(call.get('function'), dict) else {}
+                raw = fn.get('arguments')
+                parsed = raw if isinstance(raw, dict) else _json_obj(raw) if isinstance(raw, str) and raw.strip() else {}
+                calls.append({'id': str(call.get('id') or f'k{self.loop_calls}_{number}'), 'type': 'function', 'function': {'name': str(fn.get('name') or ''), 'arguments': _dump(parsed if isinstance(parsed, dict) else {})}})
+            content = message.get('content')
+            if not isinstance(content, str):
+                content = _dump(content) if content else ''
+            if not calls:
+                idle += 1
+                self.chat.append({'role': 'assistant', 'content': content or '(no call)'})
+                self.chat.append({'role': 'user', 'content': 'Call one of the tools to continue.\n' + self.status()})
+                if idle >= 3:
+                    break
+                continue
+            idle = 0
+            committing = {self.roles.get('cart'), self.roles.get('buy'), self.roles.get('refuse')} - {None}
+            if not self.asked and self.roles.get('ask') and (self.msgs_free() > 0) and any((c['function']['name'] in committing for c in calls)) and (self.left() > 8):
+                self.chat.append({'role': 'assistant', 'content': content or None, 'tool_calls': calls})
+                for call in calls:
+                    self.chat.append({'role': 'tool', 'tool_call_id': call['id'], 'content': 'Not run (no step used): the shopper is asked first.'})
+                summary = self.interview()
+                self.chat.append({'role': 'user', 'content': (summary or 'The interviewer had nothing to ask.') + '\n' + self.status()})
+                continue
+            self.chat.append({'role': 'assistant', 'content': content or None, 'tool_calls': calls})
+            self.trace.append({'kind': 'turn', 'text': content[:300], 'calls': [c['function'] for c in calls]})
+            replies = self.run_calls(calls)
+            for index, (cid, text) in enumerate(replies):
+                if index == len(replies) - 1:
+                    text += '\n' + self.status()
+                self.chat.append({'role': 'tool', 'tool_call_id': cid, 'content': text})
+
+def agent_main(problem_data: dict[str, Any]) -> list[dict[str, Any]]:
+    try:
+        episode = Kyo(problem_data)
+    except Exception as exc:
+        return [{'kind': 'crash', 'error': f'{type(exc).__name__}: {exc}'[:400]}]
+    try:
+        return episode.run()
+    except Exception as exc:
+        episode.trace.append({'kind': 'crash', 'error': f'{type(exc).__name__}: {exc}'[:400]})
+        try:
+            if not episode.finished:
+                episode.finish()
+        except Exception as again:
+            episode.trace.append({'kind': 'crash', 'error': f'{type(again).__name__}: {again}'[:400]})
+        return episode.trace
+__all__ = ['agent_main']
