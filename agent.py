@@ -897,3 +897,14 @@ class Kyo:
         if both:
             return same * 2 > len(both)
         return bool((set(spec['values']) & set(slot['values'])) - {''})
+
+    def item_groups(self) -> list[list[str]]:
+        cat_key = self.category_key()
+        groups: dict[str, list[str]] = {}
+        for ident in self.seen_order:
+            label = str(self.rows[ident].get(cat_key) or '') if cat_key else ''
+            groups.setdefault(label, []).append(ident)
+        wanted = [(_words(item.shelf or ''), _words(item.name), {w for w in _stem(item.shelf or '') | _stem(item.name) if len(w) >= 4}) for item in self.items]
+        matched = [ids for label, ids in groups.items() if any((_words(label) in (shelf, name) or {w for w in _stem(label) if len(w) >= 4} & long for shelf, name, long in wanted)) or self.owner_of(label)]
+        pool = matched or list(groups.values())
+        return sorted(pool, key=lambda ids: -len(ids))[:max(1, len(self.items))]
