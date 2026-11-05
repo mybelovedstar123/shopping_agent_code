@@ -1878,3 +1878,42 @@ class Kyo:
         if not lines:
             return ''
         return ' | '.join(lines) if short else "[fit plan: a device fits a part when the part's text names the device's model code or another name it is sold as; codes are not searchable, so list the device's category and read the codes on its rows] " + ' | '.join(lines)
+
+    def line_faults(self) -> list[str]:
+        cat_key = self.category_key()
+        ids = [i for i in self.cart_ids() if (self.held_units(i) or 0) > 0]
+        if not ids or not cat_key:
+            return []
+        label = {i: str((self.rows.get(i) or {}).get(cat_key) or '') for i in ids}
+        known = {n for n, item in enumerate(self.items, 1) if any((self.owns(item, str(r.get(cat_key) or '')) for r in self.rows.values()))}
+        owner = {i: [n for n, item in enumerate(self.items, 1) if self.owns(item, label[i])] for i in ids}
+        faults: list[str] = []
+        for n, item in enumerate(self.items, 1):
+            if n not in known:
+                continue
+            lines = [i for i in ids if n in owner[i]]
+            if not lines:
+                faults.append(f'item {n} ({item.name}) has no line in the cart')
+            elif len([i for i in lines if owner[i] == [n]]) > 1:
+                faults.append(f"item {n} ({item.name}) has {len(lines)} lines ({', '.join(lines)}); keep one")
+            for i in lines:
+                have = self.held_units(i)
+                if owner[i] == [n] and have != item.qty:
+                    faults.append(f'{i} is held at {have} unit(s); item {n} ({item.name}) wants {item.qty}')
+        if len(known) == len(self.items):
+            for i in ids:
+                if not owner[i]:
+                    faults.append(f"{i} ({label[i] or 'unknown kind'}) is not a kind the shopper asked for: take it out")
+        for i in ids:
+            if self.sold_out(i):
+                faults.append(f'{i} is sold out')
+        prices = {i: self.price_of(i) for i in ids}
+        if isinstance(self.budget, (int, float)) and all((p is not None for p in prices.values())):
+            if self.brief.get('budget_scope') == 'each':
+                over = [i for i in ids if self.budget < prices[i] <= 10 * self.budget]
+                faults += [f'{i} costs {prices[i]:g}, over the {self.budget:g} limit for each item' for i in over]
+            else:
+                total = sum((prices[i] * self.held_units(i) for i in ids))
+                if self.budget + 1e-09 < total <= 10 * self.budget:
+                    faults.append(f'the total is {total:g}, over the budget of {self.budget:g}')
+        return faults
