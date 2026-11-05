@@ -2946,3 +2946,54 @@ class Kyo:
                 self.finish()
         self.trace.append({'kind': 'end', 'finished': self.finished, 'steps': self.step, 'cost': round(self.cost, 5), 'calls': self.calls})
         return self.trace
+
+    def work(self, loop_cap: int, spend_cap: float) -> None:
+        idle = 0
+        while not self.finished and (not self.broke) and (self.left() > 0) and (self.loop_calls < loop_cap) and (self.cost < spend_cap):
+            if self.ready_to_ask():
+                summary = self.interview()
+                if summary:
+                    self.chat.append({'role': 'user', 'content': summary + '\n' + self.status()})
+                continue
+            self.trim()
+            self.loop_calls += 1
+            message = self.think(self.chat, [LIGHT, SPARE], 3000, self.offered())
+            if message is None:
+                self.misses += 1
+                if self.no_credit or self.calls >= ALL_CALLS or self.misses > 2:
+                    break
+                continue
+            calls = []
+            for number, call in enumerate(message.get('tool_calls') or []):
+                if not isinstance(call, dict):
+                    continue
+                fn = call.get('function') if isinstance(call.get('function'), dict) else {}
+                raw = fn.get('arguments')
+                parsed = raw if isinstance(raw, dict) else _json_obj(raw) if isinstance(raw, str) and raw.strip() else {}
+                calls.append({'id': str(call.get('id') or f'k{self.loop_calls}_{number}'), 'type': 'function', 'function': {'name': str(fn.get('name') or ''), 'arguments': _dump(parsed if isinstance(parsed, dict) else {})}})
+            content = message.get('content')
+            if not isinstance(content, str):
+                content = _dump(content) if content else ''
+            if not calls:
+                idle += 1
+                self.chat.append({'role': 'assistant', 'content': content or '(no call)'})
+                self.chat.append({'role': 'user', 'content': 'Call one of the tools to continue.\n' + self.status()})
+                if idle >= 3:
+                    break
+                continue
+            idle = 0
+            committing = {self.roles.get('cart'), self.roles.get('buy'), self.roles.get('refuse')} - {None}
+            if not self.asked and self.roles.get('ask') and (self.msgs_free() > 0) and any((c['function']['name'] in committing for c in calls)) and (self.left() > 8):
+                self.chat.append({'role': 'assistant', 'content': content or None, 'tool_calls': calls})
+                for call in calls:
+                    self.chat.append({'role': 'tool', 'tool_call_id': call['id'], 'content': 'Not run (no step used): the shopper is asked first.'})
+                summary = self.interview()
+                self.chat.append({'role': 'user', 'content': (summary or 'The interviewer had nothing to ask.') + '\n' + self.status()})
+                continue
+            self.chat.append({'role': 'assistant', 'content': content or None, 'tool_calls': calls})
+            self.trace.append({'kind': 'turn', 'text': content[:300], 'calls': [c['function'] for c in calls]})
+            replies = self.run_calls(calls)
+            for index, (cid, text) in enumerate(replies):
+                if index == len(replies) - 1:
+                    text += '\n' + self.status()
+                self.chat.append({'role': 'tool', 'tool_call_id': cid, 'content': text})
