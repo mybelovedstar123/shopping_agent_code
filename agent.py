@@ -694,3 +694,28 @@ class Kyo:
             pages = sorted((t for t in self.page_tools() if t != facts))
             parts.append(f'listing attributes come from {facts}' + (f"; {', '.join(bare)} show none" if bare else '') + (f"; a listing's page (what a chain of pages or a page check means) is shown by {' or '.join(pages)}" if pages else ''))
         return '\n'.join(('- ' + p for p in parts))
+
+    def status(self) -> str:
+        left = self.left()
+        text = f'[Kyo] step {self.step} of {self.max_steps} used, {left} left.'
+        if left <= self.tail() + 1:
+            text += ' FINAL STEPS: check out now when the cart holds a line for each item; end without a purchase only when your search showed that an item has no fitting listing (running out of steps does not show that).'
+        elif left <= 6 or (left <= len(self.items) + 5 and self.buys == 0):
+            text += ' Few steps left: set the cart to the chosen lines and check out now.'
+        elif self.buys == 0 and left <= 12:
+            text += ' Steps are running low: settle on your picks, fill the cart and check out within the next few steps.'
+        elif self.buys == 0 and (not self.cart_touched) and (self.step >= self.max_steps // 2):
+            text += " Half the steps are used and the cart is empty: cart each item's fitting listing now (the store may still sell one out)."
+        live = {need for _, need in self.needs_now()}
+        lookups = [need for _, need in self.refs if need in live and need not in self.ref_values]
+        if lookups and self.buys == 0:
+            text += '\n[resolve first: open the listing each of these points at, and every listing its page refers to; the last page gives the value] ' + ' | '.join(lookups[:3])
+        if self.leads:
+            text += '\n[review candidates] ' + ', '.join(self.leads)
+        plan = self.fit_plan() if self.bound and self.buys == 0 else ''
+        if plan:
+            text += '\n' + plan
+        if self.notes:
+            text += '\n[changes so far] ' + ' | '.join(self.notes[-4:])
+        text += '\n[ledger]\n' + self.ledger()
+        return text
