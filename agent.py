@@ -116,3 +116,8 @@ def _roots(text: str) -> set[str]:
         if len(w) >= 3 and w not in ('and', 'for', 'the', 'with'):
             out.add(w)
     return out
+
+def _names(prop: frozenset[str], key: frozenset[str]) -> bool:
+    if not prop or not key:
+        return False
+    return prop == key or prop <= key or (len(key) >= 2 and key <= prop)
