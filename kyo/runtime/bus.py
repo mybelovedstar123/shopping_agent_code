@@ -10,6 +10,7 @@ from typing import Any
 
 from .agent import Agent, AgentError
 from .messages import Message
+from .trace import Trace
 
 
 class AgentTimeout(AgentError):
@@ -31,14 +32,15 @@ class _Context:
         return self._bus.request(recipient, kind, payload, sender=self._name, timeout=timeout)
 
     def note(self, text, **data):
-        pass
+        self._bus.trace.record("note", self._name, text=text, **data)
 
 
 class Bus:
     """Runs a set of agents. Payloads are copied through JSON, so agents share no memory."""
 
-    def __init__(self, timeout: float = 60.0):
+    def __init__(self, timeout: float = 60.0, trace: Trace | None = None):
         self.timeout = timeout
+        self.trace = trace or Trace()
         self._agents: dict[str, Agent] = {}
         self._mailboxes: dict[str, queue.Queue[Message | None]] = {}
         self._workers: list[threading.Thread] = []
@@ -91,6 +93,9 @@ class Bus:
         answer: Future[Message] = Future()
         with self._lock:
             self._pending[message.id] = answer
+        self.trace.record(
+            "request", sender, to=recipient, kind=kind, payload=message.payload
+        )
         self._mailboxes[recipient].put(message)
         try:
             reply = answer.result(timeout if timeout is not None else self.timeout)
@@ -114,8 +119,14 @@ class Bus:
             try:
                 reply = message.reply(agent.handle(message, context))
                 reply = Message.from_json(reply.to_json())
+                self.trace.record(
+                    "reply", name, to=message.sender, kind=message.kind, payload=reply.payload
+                )
             except Exception as error:  # a failing handler must not stop this agent
                 reply = message.failure(f"{type(error).__name__}: {error}")
+                self.trace.record(
+                    "failure", name, to=message.sender, kind=message.kind, error=reply.error
+                )
             self._deliver(reply)
 
     def _deliver(self, reply: Message) -> None:
