@@ -2205,3 +2205,29 @@ class Kyo:
             self.unavailable.add(ids[0])
             return ''
         return self.reread_offers() if ids else ''
+
+    def replacements(self, lost: list[str]) -> list[str]:
+        if not self.judges():
+            return []
+        records = []
+        for ident in reversed(self.seen_order):
+            if ident in lost or ident in self.gone or self.sold_out(ident):
+                continue
+            records.append(_dump(_clip(self.full.get(ident) or self.rows.get(ident), 200))[:1200])
+            if len(records) >= 25:
+                break
+        if not records:
+            return []
+        prompt = SWAP + '\n\nREQUEST:\n' + self.request + '\n\nREQUIREMENTS IN FORCE:\n' + self.ledger()
+        prompt += '\n\nSOLD-OUT CART LINE:\n' + '\n'.join((f'{i}: {self.record_of(i)}' for i in lost)) + '\n\nCART NOW:\n' + self.cart_text()
+        prompt += '\n\nOTHER LISTING RECORDS SEEN (newest first):\n' + '\n'.join(records)
+        got = self.ask_json(prompt, self.judges(), 3500)
+        fits: list[tuple[float, str]] = []
+        for entry in _items((got or {}).get('fits')):
+            ident = str(entry.get('id') if isinstance(entry, dict) else entry)
+            price = entry.get('price') if isinstance(entry, dict) else None
+            if ident in self.rows and ident not in lost and (ident not in self.gone) and (ident not in self.cart_ids()) and (ident not in [i for _, i in fits]):
+                fits.append((float(price) if isinstance(price, (int, float)) and (not isinstance(price, bool)) else float('inf'), ident))
+        ranked = [i for _, i in sorted(fits, key=lambda f: f[0])] if self.brief.get('pick') == 'cheapest' else [i for _, i in fits]
+        self.trace.append({'kind': 'swap', 'lost': lost, 'fits': fits})
+        return ranked[:4]
