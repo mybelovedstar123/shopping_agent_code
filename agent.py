@@ -144,3 +144,64 @@ def _fits_kind(value: Any, kind: str) -> bool:
     if kind == 'null':
         return value is None
     return True
+
+def _shape(value: Any, schema: Any, where: str, faults: list[str]) -> Any:
+    if not isinstance(schema, dict):
+        return value
+    kinds = _kinds(schema)
+    if kinds and (not any((_fits_kind(value, k) for k in kinds))):
+        for kind in kinds:
+            if kind == 'integer' and isinstance(value, float) and value.is_integer():
+                value = int(value)
+                break
+            if kind in ('integer', 'number') and isinstance(value, str) and re.fullmatch('\\s*-?\\d+(\\.\\d+)?\\s*', value):
+                number = float(value)
+                value = int(number) if kind == 'integer' or number.is_integer() else number
+                break
+            if kind == 'string' and isinstance(value, (int, float)) and (not isinstance(value, bool)):
+                value = str(value)
+                break
+            if kind == 'boolean' and isinstance(value, str) and (value.strip().lower() in ('true', 'false')):
+                value = value.strip().lower() == 'true'
+                break
+            if kind == 'array' and (not isinstance(value, list)) and (value is not None):
+                value = [value]
+                break
+        if not any((_fits_kind(value, k) for k in kinds)):
+            faults.append(f"{where} should be {'/'.join(kinds)}")
+            return value
+    options = schema.get('enum')
+    if isinstance(options, list) and value not in options:
+        if isinstance(value, str):
+            low = value.strip().lower()
+            match = [o for o in options if isinstance(o, str) and o.lower() == low]
+            if match:
+                value = match[0]
+        if value not in options:
+            faults.append(f'{where}: allowed values are {options}')
+    if isinstance(value, str) and isinstance(schema.get('maxLength'), int) and (len(value) > schema['maxLength']):
+        value = value[:schema['maxLength']]
+    if isinstance(value, str) and isinstance(schema.get('minLength'), int) and (len(value) < schema['minLength']):
+        faults.append(f'{where} is too short')
+    if isinstance(value, (int, float)) and (not isinstance(value, bool)):
+        if isinstance(schema.get('minimum'), (int, float)) and value < schema['minimum']:
+            faults.append(f"{where} is below {schema['minimum']}")
+        if isinstance(schema.get('maximum'), (int, float)) and value > schema['maximum']:
+            faults.append(f"{where} is above {schema['maximum']}")
+    if isinstance(value, list):
+        if isinstance(schema.get('maxItems'), int) and len(value) > schema['maxItems']:
+            faults.append(f"{where} allows at most {schema['maxItems']} entries")
+        if isinstance(schema.get('minItems'), int) and len(value) < schema['minItems']:
+            faults.append(f"{where} needs at least {schema['minItems']} entries")
+        if isinstance(schema.get('items'), dict):
+            value = [_shape(v, schema['items'], f'{where}[{i}]', faults) for i, v in enumerate(value)]
+    if isinstance(value, dict):
+        props = schema.get('properties') if isinstance(schema.get('properties'), dict) else {}
+        if schema.get('additionalProperties') is False:
+            for name in [n for n in value if n not in props]:
+                faults.append(f'{where}.{name} is not an allowed argument')
+        for name in schema.get('required') or []:
+            if name not in value:
+                faults.append(f'{where}.{name} is required')
+        value = {k: _shape(v, props.get(k), f'{where}.{k}', faults) if k in props else v for k, v in value.items()}
+    return value
