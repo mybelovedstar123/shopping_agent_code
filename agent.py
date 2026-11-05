@@ -931,3 +931,19 @@ class Kyo:
             return False
         value = (self.rows.get(ident) or {}).get(self.stock_key) if self.stock_key else None
         return not (value is False or (isinstance(value, (int, float)) and (not isinstance(value, bool)) and (value <= 0)))
+
+    def records_in(self, observation: Any) -> list[tuple[str, dict[str, Any]]]:
+        if isinstance(observation, dict):
+            ident = self.ident(observation)
+            if ident:
+                return [(ident, observation)]
+            found: list[tuple[str, dict[str, Any]]] = []
+            for value in observation.values():
+                if isinstance(value, list):
+                    found += [(i, r) for r in value if isinstance(r, dict) for i in [self.ident(r, True)] if i]
+                elif isinstance(value, dict):
+                    found += [(i, r) for v in value.values() if isinstance(v, list) for r in v if isinstance(r, dict) for i in [self.ident(r, True)] if i]
+            return found
+        if isinstance(observation, list):
+            return [(i, r) for r in observation if isinstance(r, dict) for i in [self.ident(r, True)] if i]
+        return []
