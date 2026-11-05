@@ -744,3 +744,33 @@ class Kyo:
             self.id_key = found
             return True
         return False
+
+    def absorb(self, observation: Any) -> None:
+
+        def walk(node: Any, depth: int, in_list: bool=False) -> None:
+            if depth > 6:
+                return
+            if isinstance(node, dict):
+                ident = self.ident(node, in_list, depth)
+                if ident:
+                    if ident not in self.rows:
+                        self.seen_order.append(ident)
+                        self.rows[ident] = {}
+                    old = self.rows[ident]
+                    if any((old.get(k) is True and v is False for k, v in node.items())):
+                        self.unavailable.add(ident)
+                    elif any((old.get(k) is False and v is True for k, v in node.items())):
+                        self.unavailable.discard(ident)
+                    self.rows[ident].update(node)
+                    if _fact_block(node):
+                        self.full[ident] = dict(self.rows[ident])
+                    elif ident in self.full:
+                        self.full[ident].update(node)
+                    return
+                for value in node.values():
+                    walk(value, depth + 1)
+            elif isinstance(node, list):
+                rows = self.learn_rows(node)
+                for value in node:
+                    walk(value, depth + 1, rows)
+        walk(observation, 0)
