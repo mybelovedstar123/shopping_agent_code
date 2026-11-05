@@ -988,3 +988,18 @@ class Kyo:
         self.stock_key = self.stock_key or shape['stock']
         self.trace.append({'kind': 'shape', 'tool': name, 'shape': shape})
         return shape
+
+    def paging(self, name: str, observation: Any) -> tuple[int, int, str, Any] | None:
+        shape = self.read_shape(name, observation)
+        if not shape or not shape['count'] or (not shape['next']) or (not shape['next_arg']) or (not isinstance(observation, dict)):
+            return None
+        rows, count, value = (observation.get(shape['rows']), observation.get(shape['count']), observation.get(shape['next']))
+        if not isinstance(rows, list) or not rows or isinstance(count, bool) or (not isinstance(count, int)):
+            return None
+        if value is not None and (isinstance(value, bool) or not isinstance(value, (str, int))):
+            return None
+        return (count, len(rows), shape['next_arg'], value)
+
+    def price_sorted(self, observation: Any) -> bool:
+        prices = [self.price_of(i) for i, _ in self.records_in(observation)]
+        return len(prices) >= 3 and None not in prices and all((a <= b for a, b in zip(prices, prices[1:])))
