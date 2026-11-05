@@ -2587,3 +2587,288 @@ class Kyo:
                 out.append(call)
         self.trace.append({'kind': 'joined', 'ids': [i for _, i in picks]})
         return out
+
+    def run_calls(self, calls: list[dict[str, Any]]) -> list[tuple[str, str]]:
+        out: list[tuple[str, str]] = []
+        calls = self.join_opens(calls)
+        for index, call in enumerate(calls):
+            allowed = {t['function']['name'] for t in self.offered()}
+            cid = call['id']
+            if call.get('joined'):
+                out.append((cid, 'Shown in the side-by-side result above: Kyo opened these listings together in one step.'))
+                continue
+            fn = call.get('function') or {}
+            name = fn.get('name')
+            raw = fn.get('arguments')
+            if self.finished:
+                out.append((cid, 'Not run: the episode is over.'))
+                continue
+            if name == self.roles.get('ask'):
+                out.append((cid, "Not run (no step used): Kyo's interviewer handles every message to the shopper."))
+                continue
+            if name not in self.schemas:
+                out.append((cid, f"Not run (no step used): unknown tool. Tools: {', '.join(sorted(allowed))}."))
+                continue
+            if name not in allowed:
+                out.append((cid, 'Not run (no step used): too few steps are left for that; use: ' + ', '.join(sorted(allowed)) + '.'))
+                continue
+            if isinstance(raw, dict):
+                args = raw
+            else:
+                args = _json_obj(raw) if (raw or '').strip() else {}
+                if args is None:
+                    out.append((cid, 'Not run (no step used): the arguments were not one JSON object.'))
+                    continue
+            faults: list[str] = []
+            args = _shape(args, self.schemas[name], 'args', faults)
+            if faults:
+                out.append((cid, 'Not run (no step used): ' + '; '.join(faults[:6])))
+                continue
+            args, wrong = self.resolve_ids(name, args)
+            if wrong:
+                out.append((cid, 'Not run (no step used): ' + wrong + '.'))
+                continue
+            trimmed = ''
+            many = self.compare_target() if name == self.roles.get('compare') else None
+            if many and isinstance(args.get(many), list) and (len(args[many]) > self.compare_room()) and self.compare_bad:
+                room = self.compare_room()
+                trimmed = f"\n[Kyo] Sent the first {room} listings only: this store shows at most {room} side by side. Not shown yet: {', '.join(map(str, args[many][room:]))}."
+                args = {**args, many: args[many][:room]}
+            target = self.single_target(name)
+            if target and name in (self.roles.get('open'), self.roles.get('offer')) and (str(args.get(target)) in self.gone):
+                out.append((cid, f'Not run (no step used): {args[target]} sold out at step {self.gone[str(args[target])]} and will not come back. Replace its cart line with another fitting listing.'))
+                continue
+            if name == self.roles.get('cart') and any(((_count(v) or 0) < 0 for v in args.values() if not isinstance(v, str))):
+                view = _dump(self.cart_view) if self.cart_seen_at >= self.cart_at else ''
+                absent = [v for v in args.values() if isinstance(v, str) and v in self.rows and (v not in self.cart_lines) and (v not in view) and (v not in self.cart_said)]
+                if absent:
+                    out.append((cid, f'Not run (no step used): {absent[0]} is not in the cart, so there is nothing to take off. Cart now: ' + self.cart_text()))
+                    continue
+            ending = self.is_buy(name, args) or self.is_refuse(name, args)
+            if ending and len(calls) > 1:
+                out.append((cid, 'Not run (no step used): send the finishing call on its own, after reading your other results.'))
+                continue
+            if not ending and self.left() <= self.tail() and (self.roles.get('buy') or self.roles.get('refuse')):
+                out.append((cid, "Not run (no step used): the last steps are kept for checking out (with the shopper's approval of the basket when it is due) or ending without a purchase."))
+                continue
+            mark = name + _dump(args)
+            if not ending and name != self.roles.get('cart') and (mark in self.recent):
+                out.append((cid, 'Not run (no step used): you just made this same call and nothing changed; its result is above.'))
+                continue
+            readers = {self.roles.get(r) for r in ('search', 'open', 'offer', 'compare')} - {None}
+            cached = self.read_cache.get(mark)
+            if name in readers and cached and (cached[0] == self.version):
+                out.append((cid, f'Not run (no step used): the same call at step {cached[1]} returned this, and nothing has changed since:\n' + cached[2][:3000]))
+                continue
+            if target and name in readers and (name != self.roles.get('compare')) and self.shown_already(name, str(args.get(target))):
+                out.append((cid, f'Not run (no step used): {args[target]} has shown everything this view gives since the last change. Its record: ' + self.record_of(str(args[target]))))
+                continue
+            if many and isinstance(args.get(many), list) and args[many]:
+                keep = [i for i in args[many] if not self.shown_already(name, str(i))]
+                if not keep:
+                    out.append((cid, 'Not run (no step used): these listings have shown everything this view gives since the last change. Their records:\n' + '\n'.join((f'{i}: {self.record_of(str(i))}' for i in args[many]))[:4000]))
+                    continue
+                if len(keep) < len(args[many]):
+                    trimmed += f"\n[Kyo] Left out {', '.join((str(i) for i in args[many] if i not in keep))}: shown in full already, nothing changed since."
+                    args = {**args, many: keep}
+                    mark = name + _dump(args)
+            if ending and self.left() > 2:
+                if self.is_buy(name, args):
+                    wider = self.wider_hold()
+                    if wider:
+                        out.append((cid, wider + '\nCart now: ' + self.cart_text()))
+                        continue
+                    reread = self.reread_offers()
+                    if self.note_sold:
+                        self.find_sold()
+                    if self.cart_touched and self.cart_seen_at < self.cart_at and self.roles.get('cart_view') and (self.left() > 3):
+                        faults = []
+                        view_args = _shape({}, self.schemas.get(self.roles['cart_view']), 'args', faults)
+                        view = self.act(self.roles['cart_view'], view_args) if not faults else None
+                        if view is not None:
+                            self.cart_view = view.get('observation')
+                            self.cart_seen_at = self.step
+                            change = self.observe(self.roles['cart_view'], self.cart_view)
+                            if change:
+                                self.queued = []
+                                out.append((cid, 'Not run yet (no step used). Looking at the cart showed a change: ' + change + '\nCart now: ' + self.cart_text() + '\nApply the change, fix the cart if needed, then check out.'))
+                                continue
+                    swap = self.swap_hint()
+                    held = [i for i in self.cart_ids() if i in self.gone] if self.held < 2 else []
+                    if swap or held:
+                        self.held += 0 if swap else 1
+                        out.append((cid, 'Not run yet (no step used). ' + (swap or f"{', '.join(held)} in the cart is sold out: replace that line first.") + '\nCart now: ' + self.cart_text()))
+                        continue
+                    chain, hold = self.trail()
+                    if hold:
+                        out.append((cid, 'Not run yet (no step used). ' + chain + '\nCart now: ' + self.cart_text()))
+                        continue
+                    misfit = self.fit_faults() if self.fit_holds < 2 and self.left() > self.tail() + 3 else []
+                    if misfit:
+                        self.fit_holds += 1
+                        self.trace.append({'kind': 'fit_hold', 'faults': misfit[:4]})
+                        out.append((cid, 'Not run yet (no step used). A part in the cart does not work with the device in the cart: ' + '; '.join(misfit[:3]) + '. Swap the part (or the device), then check out.\nCart now: ' + self.cart_text()))
+                        continue
+                    faults = self.line_faults() if self.line_holds < 2 and self.left() > self.tail() + 2 else []
+                    fixed = []
+                    if faults and all((' is held at ' in f for f in faults)):
+                        fixed = self.fix_counts(self.count_fixes())
+                        faults = self.line_faults() if fixed else faults
+                        if fixed and (not faults):
+                            self.line_holds += 1
+                            out.append((cid, "Not run yet (no step used). Kyo set the cart's quantities itself: " + '; '.join(fixed) + '. If the store refused any of these, fix those lines; then check out.\nCart now: ' + self.cart_text()))
+                            continue
+                    if faults:
+                        self.line_holds += 1
+                        self.trace.append({'kind': 'line_hold', 'faults': faults[:6]})
+                        out.append((cid, 'Not run yet (no step used). The cart does not match the request yet: ' + '; '.join(faults[:6]) + ". Fix those lines (the cart tool's own way to add or take off units), then check out.\nCart now: " + self.cart_text()))
+                        continue
+                    read = self.fill_facts(self.cart_ids(), self.tail() + 3) + self.cheaper_rows()
+                    verdict = self.check_cart()
+                    if verdict:
+                        seen = "Kyo read these listings' attributes for the check (one step each):\n" + '\n'.join(read) + '\n' if read else ''
+                        out.append((cid, 'Not run yet. ' + chain + seen + verdict + '\nCart now: ' + self.cart_text()))
+                        continue
+                    if reread and self.cost > SPEND_SOFT:
+                        out.append((cid, "Not run yet (no step used). Kyo re-read the cart's listings just now:\n" + reread + '\nCheck out again when every line still shows stock and a price inside the budget; otherwise replace that line first.'))
+                        continue
+                elif self.left() > 5:
+                    review = self.audit()
+                    if review:
+                        out.append((cid, 'Not run yet (no step used). ' + review))
+                        continue
+                    if self.leads and self.left() > 4 and (self.refuse_blocks == 0):
+                        self.refuse_blocks = 1
+                        self.trace.append({'kind': 'refuse_blocked', 'leads': list(self.leads)})
+                        out.append((cid, 'Not run yet (no step used). The review found listings that appear to fit: ' + ', '.join(self.leads) + '. Open them if needed, put the best fitting one in the cart (respecting the pick rule) and check out. End without a purchase only if each of them clearly fails a requirement; then say which one in your text and send the ending call again.'))
+                        continue
+                    if self.leads and self.left() > 4 and (self.refuse_blocks == 1):
+                        self.refuse_blocks = 2
+                        first = self.leads[0]
+                        self.check_cart([first], SPEND_HARD)
+                        if self.verdicts.get(self.check_key([first])) and first in self.leads:
+                            self.confirmed = first
+                            self.trace.append({'kind': 'refuse_blocked', 'confirmed': first})
+                            out.append((cid, f"Not run yet (no step used). An independent check of {first}'s records says it meets every requirement. Add it to the cart at the requested quantity and check out; end without a purchase only if its record clearly breaks a requirement."))
+                            continue
+            if self.is_refuse(name, args) and self.left() <= 5 and (not self.late_held):
+                lines = [i for i in self.built if not self.sold_out(i)]
+                fresh = self.cart_view is not None and self.cart_seen_at >= self.cart_at
+                missing = [i for i in lines if i not in self.cart_ids() or (i in self.dropped and (not fresh))]
+                if len(lines) >= len(self.items) and len(missing) + 1 <= self.left():
+                    self.late_held = True
+                    self.trace.append({'kind': 'late_decline_held', 'lines': lines, 'missing': missing})
+                    redo = f"Put {', '.join(missing)} back in the cart at the requested quantities, then check out." if missing else 'Check out the cart as it is.'
+                    out.append((cid, 'Not run yet (no step used). Ending without a purchase earns nothing when the store has a fitting listing, and running short of steps does not show that it has none. ' + redo + ' End without a purchase only if your search showed that some requested item has no listing that meets its requirements; then send the ending call again.'))
+                    continue
+            if self.is_refuse(name, args) and (not self.leads) and (not self.pushed) and (self.left() > self.max_steps // 3):
+                self.pushed = True
+                out.append((cid, f"Not run yet (no step used). {self.left()} steps are still left, so search in ways you have not tried before ending: browse the category of each requested item and page through it with the token or offset the store returns, try single-word value queries and the property's other names, and open the listings that might fit. End without a purchase only after that."))
+                continue
+            if self.is_refuse(name, args):
+                done = self.complete_cart()
+                if done:
+                    out.append((cid, done + (' [episode finished]' if self.finished else '')))
+                    continue
+                args = self.quiet(name, args)
+            if ending and self.left() >= 2:
+                go, said = self.gate('order' if self.is_buy(name, args) else 'end')
+                if not go:
+                    out.append((cid, 'Not run yet. ' + said + '\nCart now: ' + self.cart_text()))
+                    continue
+                if said:
+                    trimmed = '\n[Kyo] ' + said + trimmed
+            reply = self.act(name, args)
+            if reply is None:
+                out.append((cid, 'The call failed (network or server). You may try again.'))
+                continue
+            observation = reply.get('observation')
+            if many and isinstance(args.get(many), list) and (len(args[many]) > 1):
+                shown = _dump(observation)
+                if not any((str(i) in shown for i in args[many])):
+                    self.compare_bad = min(self.compare_bad or 999, len(args[many]))
+                    trimmed += f'\n[Kyo] The side-by-side view showed nothing for {len(args[many])} listings: send at most {self.compare_room()} per call.'
+                else:
+                    self.compare_ok = max(self.compare_ok, len(args[many]))
+            self.recent = (self.recent + [mark])[-3:]
+            self.id_args.update(((name, k) for k, v in args.items() if (v if isinstance(v, list) else [v]) and all((isinstance(x, str) and x in self.rows for x in (v if isinstance(v, list) else [v])))))
+            self.absorb(observation)
+            if name == self.roles.get('compare'):
+                rows = self.records_in(observation)
+                if rows:
+                    self.facts_from[name] = self.facts_from.get(name, False) or any((_fact_block(r) for _, r in rows))
+            if name in readers - {self.roles.get('search')}:
+                self.note_view(name, observation)
+            plain = {tool for job, tool in self.roles.items() if job != 'search'}
+            paged = self.more_pages(name, args, observation) if name not in plain and (not ending) else ''
+            if self.single_target(name) and name not in (self.roles.get('cart'), self.roles.get('buy'), self.roles.get('refuse'), self.roles.get('ask')):
+                listing = self.ident(observation) if isinstance(observation, dict) else None
+                if listing:
+                    self.facts_from[name] = self.facts_from.get(name, False) or bool(_fact_block(observation))
+                    if name == self.roles.get('open') and (not self.facts_from[name]):
+                        other = next((t for t in self.schemas if t != name and self.single_target(t) and (self.facts_from.get(t) is not False) and (t not in (self.roles.get('cart'), self.roles.get('buy'), self.roles.get('refuse'), self.roles.get('ask'), self.roles.get('search')))), None)
+                        if other:
+                            self.roles['open'] = other
+                    if not self.facts_from[name] and name != self.roles.get('open') and (not self.roles.get('offer')):
+                        self.roles['offer'] = name
+                    if name == self.offer_tool():
+                        self.offer_seen[listing] = self.step
+            if name == self.roles.get('cart'):
+                self.note_cart(name, args)
+                self.cart_said = _dump(observation)
+                self.recent = []
+                counts = [_count(v) for v in args.values() if not isinstance(v, str) and _count(v) is not None]
+                for value in args.values():
+                    if counts and isinstance(value, str) and (value in self.rows):
+                        if counts[0] <= 0 and (not _in_rows(observation, value)):
+                            self.dropped.add(value)
+                        elif counts[0] > 0:
+                            self.dropped.discard(value)
+                lines = [i for i in self.cart_ids() if not self.sold_out(i) and i not in self.dropped]
+                if len(lines) >= len(self.built):
+                    self.built = lines
+            if name == self.roles.get('search') and self.records_in(observation):
+                self.searched = (self.searched + [dict(args)])[-8:]
+            if name == self.roles.get('cart_view'):
+                self.cart_view = observation
+                self.cart_seen_at = self.step
+            if self.is_buy(name, args):
+                self.buys += 1
+                if not reply.get('finished'):
+                    self.refused_at = self.step
+            text = self.show(observation) + paged + trimmed
+            if name not in plain and (not ending):
+                text += self.cheapest_here([observation] + self.paged_obs) + self.cap_ignored(name, args, observation)
+            base = text
+            proof = self.evidence(observation)
+            if proof:
+                text += '\n' + proof
+            if name == self.roles.get('cart') and any((_count(v) == 0 for v in args.values() if not isinstance(v, str))):
+                if any((isinstance(v, str) and v in self.rows and _in_rows(observation, v) for v in args.values())):
+                    text += '\n[Kyo] A count of 0 left that line in the cart: this tool adds the count to the line, so a negative count takes units off.'
+            self.note_sold = False
+            lines = self.loose_lines(observation)
+            if lines:
+                meaning = self.take_note(lines)
+                if meaning:
+                    text += '\n[note read] ' + meaning + '. Apply this change to your picks before checking out.'
+            refused = self.is_buy(name, args) and (not reply.get('finished'))
+            again = refused and any((line in self.spoken(observation) for line in self.sold_lines))
+            loose = self.note_sold and (refused or (not self.note_named and (not self.is_buy(name, args))))
+            if (loose or again) and self.cart_ids() and (not self.finished):
+                seen = self.find_sold()
+                if seen:
+                    text += "\n[Kyo re-read the cart's lines after the refusal]\n" + seen
+            self.note_sold = False
+            swap = self.swap_hint()
+            if swap:
+                text += '\n' + swap
+            if self.queued:
+                text += "\n[notes seen on Kyo's own calls] " + ' | '.join(self.queued)
+                self.queued = []
+            if name in readers:
+                self.read_cache[mark] = (self.version, self.step, base)
+            if reply.get('finished'):
+                text += ' [episode finished]'
+            out.append((cid, text))
+        return out
