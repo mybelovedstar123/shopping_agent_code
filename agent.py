@@ -80,3 +80,24 @@ def _clip(value: Any, limit: int, depth: int=0) -> Any:
     if isinstance(value, list):
         return [_clip(v, limit, depth + 1) for v in value]
     return value
+
+def _json_obj(text: Any) -> dict[str, Any] | None:
+    if not isinstance(text, str):
+        return None
+    text = text.strip()
+    fence = re.match('^```[A-Za-z]*\\s*(.*?)\\s*```$', text, re.S)
+    if fence:
+        text = fence.group(1)
+    try:
+        got = json.loads(text)
+        return got if isinstance(got, dict) else None
+    except ValueError:
+        pass
+    left, right = (text.find('{'), text.rfind('}'))
+    if 0 <= left < right:
+        try:
+            got = json.loads(text[left:right + 1])
+            return got if isinstance(got, dict) else None
+        except ValueError:
+            return None
+    return None
