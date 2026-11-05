@@ -1318,3 +1318,62 @@ class Kyo:
                             keep[k] = next((a[k] for a in worded if k in a and _dump(a[k]) == best))
                 return (tool, keep, field)
         return None
+
+    def value_words(self, number: int) -> list[str]:
+        out = []
+        for n, need in self.needs_now():
+            if n != number or need in [m for _, m in self.refs] or ':' not in need:
+                continue
+            value = need.split(':', 1)[1].strip()
+            if not value or re.search('\\b(?:not|no|other than|unlike|alongside|listing|page|shown|at most|at least|under|over|below|above|less|more|between|within|up to|or)\\b', value, re.I):
+                continue
+            out.append(value)
+        return out
+
+    def value_search(self, numbers: list[int]) -> str:
+        plan = self.search_template()
+        if not plan or self.left() < 22:
+            return ''
+        tool, base, field = plan
+        seen: list[str] = []
+        budget = 8
+        for number in numbers:
+            values = self.value_words(number)
+            item = self.items[number - 1]
+            fresh = [v for v in values if any((':' in t and t.split(':', 1)[1].strip() == v for t in item.told))]
+            if not fresh or budget <= 2:
+                continue
+            stated = [i for i, v in enumerate(values) if v not in fresh]
+            drop = stated[-1] if stated else 0
+            tries = [values, values[:drop] + values[drop + 1:]] if len(values) > 1 else [values]
+            for words in tries[:2]:
+                if not words:
+                    continue
+                faults: list[str] = []
+                args = _shape({**base, field: ' '.join(words)}, self.schemas.get(tool), 'args', faults)
+                if faults or self.finished:
+                    break
+                reply = self.act(tool, args)
+                budget -= 1
+                if reply is None:
+                    break
+                observation = reply.get('observation')
+                self.observe(tool, observation)
+                cat_key = self.category_key()
+                found = [i for i, _ in self.records_in(observation)]
+                cap = self.budget if isinstance(self.budget, (int, float)) else None
+                prices = [self.price_of(i) for i in found]
+                if cap is not None and prices and all((p is not None and p > 10 * cap for p in prices)):
+                    cap = None
+                rows = [i for i in found if self.buyable(i) and (not cat_key or self.owns(item, str((self.rows.get(i) or {}).get(cat_key) or ''))) and (cap is None or (self.price_of(i) or 0) <= cap)]
+                seen.append(f'{_dump(args.get(field))}: ' + (', '.join(rows[:6]) or 'no row of that kind'))
+                if rows:
+                    opened = self.fill_facts([i for i in rows if i not in self.full][:min(3, budget)], self.tail() + 16)
+                    budget -= len(opened)
+                    if opened:
+                        seen.append('opened: ' + ' | '.join(opened)[:2400])
+                    break
+        if not seen:
+            return ''
+        self.trace.append({'kind': 'value_search', 'seen': [s[:200] for s in seen]})
+        return "[Kyo searched each such item's requirement values together and read the first fitting-kind rows] " + '\n'.join(seen)
