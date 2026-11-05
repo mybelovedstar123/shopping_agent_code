@@ -1427,3 +1427,82 @@ class Kyo:
         cat_key = self.category_key()
         item = self.items[number - 1]
         return sum((1 for record in self.full.values() if cat_key and self.owns(item, str(record.get(cat_key) or '')) and _fact_block(record)))
+
+    def plan_lanes(self, count: int) -> dict[int, list[str]]:
+        table = self.key_table()
+        settled = []
+        for number, item in enumerate(self.items, 1):
+            settled.append(f'item {number}: {item.name} - settled by the request: ' + ('; '.join(item.musts) or 'nothing'))
+        listing = []
+        last = None
+        for index, (label, name, carried, values) in enumerate(table, 1):
+            if label != last:
+                listing.append(f'category {label!r}:')
+                last = label
+            listing.append(f'  {index}. {name} (on {carried}): ' + ' | '.join(values) + self.not_stated(label, name, values) + (' [several features in one: ask last]' if re.search(CATCH_ALL, name) else ''))
+        prompt = PLAN.replace('COUNT', str(max(1, count))) + '\n\nREQUEST:\n' + self.request + '\n\nITEMS:\n' + '\n'.join(settled)
+        first = [str(x) for x in _items(self.brief.get('ask_first')) if str(x).strip()]
+        if first:
+            prompt += '\n\nASK FIRST (the request asks to be asked about these):\n' + '\n'.join(first)
+        prompt += '\n\nATTRIBUTE KEYS SEEN:\n' + ('\n'.join(listing) or '(no full listing records yet)')
+        plan = self.ask_json(prompt, [HEAVY, LIGHT], 3500) or {}
+        lanes: dict[int, list[str]] = {n: [] for n in range(1, len(self.items) + 1)}
+        hinted: dict[int, set[str]] = {n: set() for n in lanes}
+        for pick in _items(plan.get('ask')):
+            if not isinstance(pick, dict):
+                continue
+            number = min(max(1, _count(pick.get('item') or 1) or 1), len(self.items))
+            label = re.split('\\s+(?:and|or)\\s+|[/,;(]', str(pick.get('label') or ''))[0].strip().rstrip('?.')
+            if not label or len(label.split()) > 5:
+                continue
+            if all((_words(label) != _words(other) for other in lanes[number])):
+                lanes[number].append(label)
+            if str(pick.get('hint') or '').strip():
+                hinted[number].add(_words(label))
+                if number not in self.plan_order:
+                    self.plan_order.append(number)
+        for number in lanes:
+            keys = self.lane_keys(number, table)
+            read = max(1, self.records_of_item(number))
+            own: dict[str, float] = {}
+            for label, key, carried, _ in table:
+                if self.owner_of(label) == number:
+                    own[key] = max(own.get(key, 0.0), carried / read)
+
+            def spelled(label: str) -> str:
+                plain = lambda text: re.sub('our\\b', 'or', re.sub('(?<=[a-z]{3})s\\b', '', _words(text)))
+                return next((k for k in own if plain(k) == plain(label)), label)
+
+            def share_of(label: str) -> float:
+                if _words(label) in own:
+                    return own[_words(label)]
+                near = [s for k, s in own.items() if _names(_stem(label), _stem(k)) or _names(_stem(k), _stem(label))]
+                return max(near) if near else 0.0
+            hinted[number] = {_words(spelled(h)) for h in hinted[number]}
+            lane = []
+            for pick in lanes[number]:
+                if all((_words(spelled(pick)) != _words(other) for other in lane)):
+                    lane.append(spelled(pick))
+            for key in [k for k in keys if own.get(k, 0.0) >= GUARD_SHARE and (not re.search(CATCH_ALL, k))][:GUARD_KEYS]:
+                if any((_words(key) == _words(other) for other in lane[:3])):
+                    continue
+                weak = next((i for i, other in enumerate(lane[:3]) if _words(other) not in hinted[number] and share_of(other) + GUARD_GAP <= own.get(key, 0.0)), None)
+                if weak is None and len(lane) >= 3:
+                    continue
+                placed = [other for other in lane if _words(other) != _words(key)]
+                if weak is not None and len(self.items) > 1:
+                    moved = placed[weak]
+                    placed[weak] = key
+                    placed.insert(min(3, len(placed)), moved)
+                else:
+                    placed.insert(min(len(placed), weak if weak is not None else len(placed)), key)
+                if any((_words(x) in hinted[number] and all((_words(x) != _words(y) for y in placed[:3])) for x in lane[:3])):
+                    continue
+                lane = placed
+            lanes[number] = lane
+            for key in keys:
+                if all((_words(key) != _words(other) for other in lanes[number])):
+                    lanes[number].append(key)
+            lanes[number] = [x for x in lanes[number] if not re.search(CATCH_ALL, _words(x))] + [x for x in lanes[number] if re.search(CATCH_ALL, _words(x))]
+        self.trace.append({'kind': 'plan', 'ask': _clip(plan.get('ask'), 120), 'lanes': {n: v[:8] for n, v in lanes.items()}})
+        return lanes
