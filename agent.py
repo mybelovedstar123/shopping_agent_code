@@ -44,3 +44,232 @@ CATCH_ALL = '^(?!.*\\b(?:types?|styles?|kinds?|shapes?)\\b).*\\b(?:features?|fun
 WIDEN_EACH = 6
 FIT_CODE = '[A-Z][A-Za-z]{0,5} ?\\d{3,6}'
 PART_CODE = '[A-Z]{1,4}\\d{3,6}'
+
+def _codes(text: Any) -> list[str]:
+    return [re.sub('\\s+', ' ', c).strip().lower() for c in re.findall('\\b' + FIT_CODE + '\\b', str(text or ''))]
+
+def _fit_marks(text: Any) -> dict[str, Any]:
+    text = str(text or '')
+    own = re.search('[\\[(]\\s*(?:part\\s+)?(' + PART_CODE + ')\\s*[\\])]', text, re.I)
+    codes: list[str] = []
+    for hit in re.finditer('\\bmodel\\s*(?:no\\.?|number|#)\\s*[:.]?\\s*(' + FIT_CODE + ')\\b', text, re.I):
+        codes += _codes(hit.group(1))
+    for hit in re.finditer('\\b(?:also sold as|also known as|sold also as)\\s+([^.;]+)', text, re.I):
+        codes += _codes(hit.group(1))
+    works: list[str] = []
+    for hit in re.finditer('\\b(?<!not )(?<!never )(?:works with|compatible with|fits)\\s*:?\\s+([^.;]+)', text, re.I):
+        if not re.search('\\bpart\\s+' + PART_CODE + '\\s+also\\s+$', text[max(0, hit.start() - 40):hit.start()], re.I):
+            works += _codes(hit.group(1))
+    also = [(hit.group(1).upper(), _codes(hit.group(2))) for hit in re.finditer('\\bpart\\s+(' + PART_CODE + ')\\s+also fits\\s*:?\\s*([^.;]+)', text, re.I)]
+    more = re.search('\\b(?:more|details|see|read)\\s+(?:on|at|under|about)?\\s*(?:the\\s+)?part\\s+(' + PART_CODE + ')', text, re.I)
+    return {'own': own.group(1).upper() if own else '', 'codes': codes, 'works': works, 'also': also, 'more': more.group(1).upper() if more else ''}
+
+def _dump(value: Any) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, separators=(',', ':'))
+    except (TypeError, ValueError):
+        return str(value)
+
+def _clip(value: Any, limit: int, depth: int=0) -> Any:
+    if depth > 7:
+        return '...'
+    if isinstance(value, str):
+        return value if len(value) <= limit else value[:limit] + '...'
+    if isinstance(value, dict):
+        return {k: _clip(v, limit, depth + 1) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_clip(v, limit, depth + 1) for v in value]
+    return value
+
+def _json_obj(text: Any) -> dict[str, Any] | None:
+    if not isinstance(text, str):
+        return None
+    text = text.strip()
+    fence = re.match('^```[A-Za-z]*\\s*(.*?)\\s*```$', text, re.S)
+    if fence:
+        text = fence.group(1)
+    try:
+        got = json.loads(text)
+        return got if isinstance(got, dict) else None
+    except ValueError:
+        pass
+    left, right = (text.find('{'), text.rfind('}'))
+    if 0 <= left < right:
+        try:
+            got = json.loads(text[left:right + 1])
+            return got if isinstance(got, dict) else None
+        except ValueError:
+            return None
+    return None
+
+def _words(key: str) -> str:
+    key = re.sub('([a-z0-9])([A-Z])', '\\1 \\2', str(key))
+    return re.sub('[\\s_.\\-]+', ' ', key).strip().lower()
+
+def _stem(text: str) -> frozenset[str]:
+    return frozenset((w[:-1] if len(w) > 3 and w.endswith('s') else w for w in _words(text).split()))
+
+def _roots(text: str) -> set[str]:
+    out = set()
+    for w in _words(text).split():
+        w = w[:-2] if re.search('(?:ch|sh|ss|x|z)es$', w) else w[:-1] if len(w) > 3 and w.endswith('s') and (not w.endswith('ss')) else w
+        if len(w) >= 3 and w not in ('and', 'for', 'the', 'with'):
+            out.add(w)
+    return out
+
+def _names(prop: frozenset[str], key: frozenset[str]) -> bool:
+    if not prop or not key:
+        return False
+    return prop == key or prop <= key or (len(key) >= 2 and key <= prop)
+
+def _kinds(schema: dict[str, Any]) -> list[str]:
+    kind = schema.get('type')
+    if isinstance(kind, str):
+        return [kind]
+    return [k for k in kind or [] if isinstance(k, str)]
+
+def _fits_kind(value: Any, kind: str) -> bool:
+    if kind == 'string':
+        return isinstance(value, str)
+    if kind == 'integer':
+        return isinstance(value, int) and (not isinstance(value, bool))
+    if kind == 'number':
+        return isinstance(value, (int, float)) and (not isinstance(value, bool))
+    if kind == 'boolean':
+        return isinstance(value, bool)
+    if kind == 'array':
+        return isinstance(value, list)
+    if kind == 'object':
+        return isinstance(value, dict)
+    if kind == 'null':
+        return value is None
+    return True
+
+def _shape(value: Any, schema: Any, where: str, faults: list[str]) -> Any:
+    if not isinstance(schema, dict):
+        return value
+    kinds = _kinds(schema)
+    if kinds and (not any((_fits_kind(value, k) for k in kinds))):
+        for kind in kinds:
+            if kind == 'integer' and isinstance(value, float) and value.is_integer():
+                value = int(value)
+                break
+            if kind in ('integer', 'number') and isinstance(value, str) and re.fullmatch('\\s*-?\\d+(\\.\\d+)?\\s*', value):
+                number = float(value)
+                value = int(number) if kind == 'integer' or number.is_integer() else number
+                break
+            if kind == 'string' and isinstance(value, (int, float)) and (not isinstance(value, bool)):
+                value = str(value)
+                break
+            if kind == 'boolean' and isinstance(value, str) and (value.strip().lower() in ('true', 'false')):
+                value = value.strip().lower() == 'true'
+                break
+            if kind == 'array' and (not isinstance(value, list)) and (value is not None):
+                value = [value]
+                break
+        if not any((_fits_kind(value, k) for k in kinds)):
+            faults.append(f"{where} should be {'/'.join(kinds)}")
+            return value
+    options = schema.get('enum')
+    if isinstance(options, list) and value not in options:
+        if isinstance(value, str):
+            low = value.strip().lower()
+            match = [o for o in options if isinstance(o, str) and o.lower() == low]
+            if match:
+                value = match[0]
+        if value not in options:
+            faults.append(f'{where}: allowed values are {options}')
+    if isinstance(value, str) and isinstance(schema.get('maxLength'), int) and (len(value) > schema['maxLength']):
+        value = value[:schema['maxLength']]
+    if isinstance(value, str) and isinstance(schema.get('minLength'), int) and (len(value) < schema['minLength']):
+        faults.append(f'{where} is too short')
+    if isinstance(value, (int, float)) and (not isinstance(value, bool)):
+        if isinstance(schema.get('minimum'), (int, float)) and value < schema['minimum']:
+            faults.append(f"{where} is below {schema['minimum']}")
+        if isinstance(schema.get('maximum'), (int, float)) and value > schema['maximum']:
+            faults.append(f"{where} is above {schema['maximum']}")
+    if isinstance(value, list):
+        if isinstance(schema.get('maxItems'), int) and len(value) > schema['maxItems']:
+            faults.append(f"{where} allows at most {schema['maxItems']} entries")
+        if isinstance(schema.get('minItems'), int) and len(value) < schema['minItems']:
+            faults.append(f"{where} needs at least {schema['minItems']} entries")
+        if isinstance(schema.get('items'), dict):
+            value = [_shape(v, schema['items'], f'{where}[{i}]', faults) for i, v in enumerate(value)]
+    if isinstance(value, dict):
+        props = schema.get('properties') if isinstance(schema.get('properties'), dict) else {}
+        if schema.get('additionalProperties') is False:
+            for name in [n for n in value if n not in props]:
+                faults.append(f'{where}.{name} is not an allowed argument')
+        for name in schema.get('required') or []:
+            if name not in value:
+                faults.append(f'{where}.{name} is required')
+        value = {k: _shape(v, props.get(k), f'{where}.{k}', faults) if k in props else v for k, v in value.items()}
+    return value
+
+def _items(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, (str, dict)) and value:
+        return [value]
+    return []
+
+def _count(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str) and re.fullmatch('\\s*\\d+(\\.0+)?\\s*', value):
+        return int(float(value))
+    return None
+
+def _id_like(value: Any, named: bool=False) -> bool:
+    if not isinstance(value, str) or not 3 <= len(value.strip()) <= 64 or ' ' in value.strip():
+        return False
+    return named or bool(re.search('\\d', value))
+
+def _learn_id(rows: list[dict[str, Any]]) -> str | None:
+    best = None
+    for key in rows[0]:
+        values = [row.get(key) for row in rows]
+        if not all((_id_like(v, 'id' in str(key).lower()) for v in values)):
+            continue
+        values = [v.strip() for v in values]
+        if len(rows) > 1 and len(set(values)) < len(values):
+            continue
+        score = ('id' in str(key).lower(), sum((len(v) for v in values)) / len(values))
+        if best is None or score > best[0]:
+            best = (score, key)
+    return best[1] if best else None
+
+def _in_rows(node: Any, ident: str, depth: int=0) -> bool:
+    if depth > 5:
+        return False
+    if isinstance(node, list):
+        return any((isinstance(v, dict) and ident in [str(x).strip() for x in v.values() if isinstance(x, str)] for v in node)) or any((_in_rows(v, ident, depth + 1) for v in node))
+    if isinstance(node, dict):
+        return any((_in_rows(v, ident, depth + 1) for v in node.values()))
+    return False
+
+def _fact_block(node: Any) -> dict[str, Any] | None:
+    if not isinstance(node, dict):
+        return None
+    best = None
+    for value in node.values():
+        if isinstance(value, dict) and len(value) >= 2:
+            scalars = {k: v for k, v in value.items() if isinstance(v, (str, int, float)) and (not isinstance(v, bool))}
+            if len(scalars) >= 2 and (best is None or len(scalars) > len(best)):
+                best = scalars
+    return best
+
+class Item:
+
+    def __init__(self, name: str, shelf: str, qty: int, musts: list[str]):
+        self.name = name
+        self.shelf = shelf
+        self.qty = qty
+        self.musts = musts
+        self.told: list[str] = []
+        self.dropped: list[str] = []
+        self.free: list[str] = []
