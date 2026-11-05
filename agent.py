@@ -2196,3 +2196,12 @@ class Kyo:
         if picks:
             return text + f" Listings already read that appear to fit that item instead: {', '.join(picks)}. In this turn take the sold-out line out of the cart and add {picks[0]} at the requested quantity, then check out."
         return text + ' Remove that line from the cart and add the best other listing that fits; search for one if none you have read fits.'
+
+    def find_sold(self) -> str:
+        ids = [i for i in self.cart_ids() if i not in self.gone]
+        if any((self.sold_out(i) for i in ids)):
+            return ''
+        if len(ids) == 1:
+            self.unavailable.add(ids[0])
+            return ''
+        return self.reread_offers() if ids else ''
