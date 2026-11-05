@@ -1064,3 +1064,12 @@ class Kyo:
         others = {k: [o for o in props[k]['enum'] if o != v] for k, v in modes.items()}
         hint = '; list the category with ' + ', '.join((f'{k}={_dump(o[0])}' for k, o in others.items() if o)) + f' and the same {caps[0]} to see only cheaper listings' if any(others.values()) else ''
         return f'\n[Kyo] This search did not apply {caps[0]}={cap:g}: {len(over)} of its rows cost more{hint}.'
+
+    def cheapest_here(self, observations: list[Any]) -> str:
+        if self.brief.get('pick') != 'cheapest' or not self.price_key:
+            return ''
+        found = {i for seen in observations for i, _ in self.records_in(seen)}
+        rows = [(self.price_of(i), i) for i in found if self.buyable(i) and self.price_of(i) is not None]
+        if len(rows) < 2:
+            return ''
+        return '\n[Kyo] buyable rows here, cheapest first: ' + ', '.join((f'{i} ({p:g})' for p, i in sorted(rows)[:6]))
