@@ -273,3 +273,449 @@ class Item:
         self.told: list[str] = []
         self.dropped: list[str] = []
         self.free: list[str] = []
+
+class Kyo:
+
+    def __init__(self, problem: dict[str, Any]):
+        environment = problem['environment']
+        self.binding = dict(environment['binding'])
+        self.view = environment['policy_view']
+        self.request = str(self.view.get('query') or '')
+        self.tools = [t for t in self.view.get('tools') or [] if isinstance(t, dict) and isinstance(t.get('function'), dict) and isinstance(t['function'].get('name'), str)]
+        self.schemas = {t['function']['name']: t['function'].get('parameters') if isinstance(t['function'].get('parameters'), dict) else {'type': 'object', 'properties': {}} for t in self.tools}
+        steps = _count(self.view.get('max_steps'))
+        if steps is None and isinstance(self.view.get('max_steps'), float):
+            steps = int(self.view['max_steps'])
+        self.max_steps = steps if steps and steps > 0 else 30
+        self.step = 0
+        self.finished = bool(self.view.get('finished'))
+        self.broke = False
+        self.no_credit = False
+        self.waited = 0
+        self.misses = 0
+        self.cost = 0.0
+        self.calls = 0
+        self.loop_calls = 0
+        self.trace: list[dict[str, Any]] = []
+        self.brief: dict[str, Any] = {}
+        self.roles: dict[str, str] = {}
+        self.items: list[Item] = []
+        self.budget: Any = None
+        self.msg_limit = 0
+        self.msg_used = 0
+        self.process: list[dict[str, Any]] = []
+        self.reserve = 0
+        self.gate_msgs = 0
+        self.gate_ok: set[tuple[str, str]] = set()
+        self.done_log: list[str] = []
+        self.done_steps: list[int] = []
+        self.asked = False
+        self.qa: list[tuple[str, str]] = []
+        self.rows: dict[str, dict[str, Any]] = {}
+        self.full: dict[str, dict[str, Any]] = {}
+        self.seen_order: list[str] = []
+        self.heard: set[str] = set()
+        self.notes: list[str] = []
+        self.version = 0
+        self.cart_touched = False
+        self.cart_at = -1
+        self.cart_seen_at = -1
+        self.cart_view: Any = None
+        self.note_named = False
+        self.cart_lines: dict[str, int] = {}
+        self.checked: set[str] = set()
+        self.audited = False
+        self.offer_seen: dict[str, int] = {}
+        self.gone: dict[str, int] = {}
+        self.unavailable: set[str] = set()
+        self.sold_lines: set[str] = set()
+        self.note_sold = False
+        self.held = 0
+        self.id_args: set[tuple[str, str]] = set()
+        self.cart_said = ''
+        self.refused_at = -1
+        self.leads: list[str] = []
+        self.refuse_blocks = 0
+        self.pushed = False
+        self.built: list[str] = []
+        self.dropped: set[str] = set()
+        self.late_held = False
+        self.lead_items: dict[str, list[str]] = {}
+        self.verdicts: dict[str, bool] = {}
+        self.confirmed: str | None = None
+        self.completed = False
+        self.id_key: str | None = None
+        self.facts_from: dict[str, bool] = {}
+        self.queued: list[str] = []
+        self.buys = 0
+        self.refusals = 0
+        self.recent: list[str] = []
+        self.chat: list[dict[str, Any]] = []
+        self.opened: set[str] = set()
+        self.refs: list[tuple[int, str]] = []
+        self.ref_values: dict[str, str] = {}
+        self.trails = 0
+        self.trail_blocks = 0
+        self.compare_ok = 0
+        self.compare_bad = 0
+        self.tool_keys: dict[str, set[str]] = {}
+        self.view_keys: dict[str, tuple[int, set[str]]] = {}
+        self.read_cache: dict[str, tuple[int, int, str]] = {}
+        self.pages_read = 0
+        self.shapes: dict[str, dict[str, Any] | None] = {}
+        self.price_key: str | None = None
+        self.stock_key: str | None = None
+        self.cheaper_marks: set[str] = set()
+        self.wider_held = False
+        self.paged_obs: list[Any] = []
+        self.plan_order: list[int] = []
+        self.line_holds = 0
+        self.bound: list[tuple[int, int]] = []
+        self.fit_holds = 0
+        self.searched: list[dict[str, Any]] = []
+        self.link_searches = 0
+        self.link_seen: dict[str, list[str]] = {}
+
+    def left(self) -> int:
+        return self.max_steps - self.step
+
+    def msgs_free(self) -> int:
+        return self.msg_limit - self.msg_used - max(0, self.reserve - self.gate_msgs)
+
+    def cart_mark(self) -> str:
+        return _dump(sorted(self.cart_lines.items()))
+
+    def page_tools(self) -> set[str]:
+        page = self.roles.get('offer') or self.roles.get('open')
+        return {t for t in (page, self.roles.get('compare')) if t}
+
+    def facts_tool(self) -> str | None:
+        known = next((t for t, ok in self.facts_from.items() if ok and self.single_target(t)), None)
+        if known:
+            return known
+        tool = self.roles.get('open')
+        return tool if self.facts_from.get(tool or '') is not False and self.single_target(tool) else None
+
+    def compare_facts(self) -> bool | None:
+        return self.facts_from.get(self.roles.get('compare') or '')
+
+    def compare_bare(self) -> bool:
+        seen = self.compare_facts()
+        return seen is False or (seen is None and (self.facts_from.get(self.facts_tool() or '') is True or bool(self.roles.get('offer'))))
+
+    def gate_due(self, stage: str) -> bool:
+        return any((p['when'] == stage for p in self.process)) and (stage, self.cart_mark() + f'#{self.version}') not in self.gate_ok
+
+    def tail(self) -> int:
+        talk = any((p['when'] == 'order' and p['messages'] > 0 for p in self.process))
+        return 2 if talk and self.msg_used < self.msg_limit and self.gate_due('order') else 1
+
+    def judges(self, limit: float=SPEND_SOFT) -> list[str]:
+        if self.cost <= limit and self.cost + HEAVY_ROOM <= SPEND_HARD:
+            return [HEAVY, LIGHT]
+        return [LIGHT] if self.cost <= SPEND_HARD else []
+
+    def think(self, messages: list[dict[str, Any]], models: list[str], max_tokens: int, tools: list[dict[str, Any]] | None=None) -> dict[str, Any] | None:
+        for model in models:
+            if self.calls >= ALL_CALLS:
+                return None
+            self.calls += 1
+            tries = 0
+            while True:
+                message, status = self.call_model(model, messages, max_tokens, tools)
+                if message is not None:
+                    return message
+                passing = status is None or status in (402, 408, 425, 429) or (isinstance(status, int) and status >= 500)
+                if not passing or tries >= (1 if status in (None, 408) else len(WAITS)) or self.waited + WAITS[tries] > WAIT_TOTAL:
+                    break
+                pause = WAITS[tries] * (0.8 + 0.4 * random.random())
+                self.waited += WAITS[tries]
+                tries += 1
+                time.sleep(pause)
+            if status == 402:
+                self.no_credit = True
+                return None
+        return None
+
+    def call_model(self, model: str, messages: list[dict[str, Any]], max_tokens: int, tools: list[dict[str, Any]] | None) -> tuple[dict[str, Any] | None, Any]:
+        sent = messages
+        if model.startswith('anthropic/') and len(messages) > 1:
+            sent = [dict(m) for m in messages]
+            marks = [0] + ([len(sent) - 1] if len(sent) > 1 else [])
+            for index in marks:
+                content = sent[index].get('content')
+                if isinstance(content, str) and content:
+                    sent[index]['content'] = [{'type': 'text', 'text': content, 'cache_control': {'type': 'ephemeral'}}]
+        body: dict[str, Any] = {'model': model, 'messages': sent, 'max_tokens': max_tokens, 'temperature': 0}
+        if tools:
+            body['tools'] = tools
+            body['tool_choice'] = 'auto'
+        result = _llm.post_verbose('/inference/chat/completions', body)
+        data = result.data
+        if isinstance(data, dict) and data.get('choices'):
+            usage = data.get('usage') or {}
+            if isinstance(usage.get('cost'), (int, float)):
+                self.cost += float(usage['cost'])
+            message = data['choices'][0].get('message') or {}
+            if message.get('content') or message.get('tool_calls'):
+                return (message, 200)
+            self.trace.append({'kind': 'llm_fail', 'model': model, 'status': 0})
+            return (None, 0)
+        error = result.error or {}
+        status = error.get('status')
+        if isinstance(data, dict) and isinstance(data.get('error'), dict):
+            status = _count(data['error'].get('code'))
+            error = {'body': data['error'].get('message')}
+        self.trace.append({'kind': 'llm_fail', 'model': model, 'status': status, 'body': str(error.get('body') or '')[:200]})
+        return (None, status)
+
+    def ask_json(self, prompt: str, models: list[str], max_tokens: int=1800) -> dict[str, Any] | None:
+        for model in models:
+            message = self.think([{'role': 'user', 'content': prompt}], [model], max_tokens)
+            got = _json_obj((message or {}).get('content'))
+            if got is not None:
+                return got
+            if self.broke or self.no_credit or self.calls >= ALL_CALLS:
+                return None
+        return None
+
+    def act(self, name: str, args: dict[str, Any]) -> dict[str, Any] | None:
+        payload = dict(self.binding)
+        payload['step'] = self.step + 1
+        payload['action'] = {'name': name, 'args': args}
+        for _ in range(4):
+            result = _env.post_verbose('/environment/call', payload)
+            if isinstance(result.data, dict):
+                data = result.data
+                self.step = data['step'] if isinstance(data.get('step'), int) else self.step + 1
+                if data.get('finished'):
+                    self.finished = True
+                seen = data.get('observation')
+                if name in self.page_tools() and (not (isinstance(seen, dict) and seen.get('error'))):
+                    for value in args.values():
+                        self.opened.update((v.strip() for v in (value if isinstance(value, list) else [value]) if isinstance(v, str)))
+                return data
+            error = result.error or {}
+            status = error.get('status')
+            body = str(error.get('body') or '')
+            self.trace.append({'kind': 'env_fail', 'status': status, 'body': body[:200]})
+            if status == 409:
+                low = body.lower()
+                if 'finish' in low or 'quarantin' in low or 'finaliz' in low:
+                    self.finished = True
+                    return None
+                found = re.search('expected (\\d+)', body)
+                if found:
+                    self.step = int(found.group(1)) - 1
+                    payload['step'] = self.step + 1
+                    continue
+                if 'reuse' in low or 'different action' in low:
+                    self.step += 1
+                    payload['step'] = self.step + 1
+                    continue
+                return None
+            if status in (400, 401, 402, 403, 404, 422):
+                if status == 402:
+                    self.broke = True
+                return None
+        return None
+
+    def read_request(self) -> None:
+        lines = []
+        for tool in self.tools:
+            fn = tool['function']
+            lines.append(f"- {fn['name']}: {fn.get('description', '')} | parameters: {_dump(fn.get('parameters') or {})}")
+        prompt = BRIEF + '\nTOOLS:\n' + '\n'.join(lines) + '\n\nREQUEST:\n' + self.request
+        if self.view.get('opening') is not None:
+            prompt += '\n\nOPENING NOTE FROM THE STORE:\n' + _dump(_clip(self.view.get('opening'), 1500))
+        brief = self.ask_json(prompt, [LIGHT], 4000) or {}
+        if not self.no_credit and (not _items(brief.get('items')) or not isinstance(brief.get('roles'), dict) or (not brief['roles'].get('buy'))):
+            brief = self.ask_json(prompt, [HEAVY, LIGHT], 2500) or brief
+        elif not self.no_credit and self.shared_shelf(brief):
+            again = self.ask_json(prompt, [HEAVY], 2500) or {}
+            if _items(again.get('items')) and isinstance(again.get('roles'), dict) and again['roles'].get('buy'):
+                brief = again
+        self.brief = brief
+        roles = brief.get('roles') if isinstance(brief.get('roles'), dict) else {}
+        self.roles = {k: v for k, v in roles.items() if isinstance(v, str) and v in self.schemas}
+        for key in ('buy_args', 'refuse_args'):
+            if not isinstance(brief.get(key), dict):
+                brief[key] = {}
+        buy, refuse = (self.roles.get('buy'), self.roles.get('refuse'))
+        if buy and buy == refuse and (not brief['buy_args'] or not brief['refuse_args'] or brief['buy_args'] == brief['refuse_args']):
+            ask = f'The store tool {buy} both checks out and ends without a purchase, depending on its arguments. Its schema: ' + _dump(self.schemas.get(buy)) + '\nReturn ONE JSON object and nothing else: {"buy_args": the fixed arguments that check out, "refuse_args": the fixed arguments that end without a purchase} (only the arguments that choose the mode).'
+            fixed = self.ask_json(ask, [LIGHT, HEAVY], 1500) or {}
+            if isinstance(fixed.get('buy_args'), dict) and isinstance(fixed.get('refuse_args'), dict) and (fixed['buy_args'] != fixed['refuse_args']):
+                brief['buy_args'], brief['refuse_args'] = (fixed['buy_args'], fixed['refuse_args'])
+        for entry in _items(brief.get('items')):
+            if not isinstance(entry, dict):
+                continue
+            quantity = _count(entry.get('quantity'))
+            count = quantity if quantity and quantity > 0 else 1
+            musts = [str(m) for m in _items(entry.get('musts')) if m]
+            self.items.append(Item(str(entry.get('name') or 'the product'), str(entry.get('shelf') or ''), count, musts))
+        merged: list[Item] = []
+        became: dict[int, int] = {}
+        for old, item in enumerate(self.items, 1):
+            twin = next((m for m in merged if item.shelf.strip() and _words(m.shelf) == _words(item.shelf) and (not any((_words(a.split(':')[0]) == _words(b.split(':')[0]) and _words(a.partition(':')[2]) != _words(b.partition(':')[2]) for a in m.musts for b in item.musts)))), None)
+            if twin is None:
+                merged.append(item)
+                became[old] = len(merged)
+            else:
+                became[old] = merged.index(twin) + 1
+                twin.musts += [m for m in item.musts if m not in twin.musts]
+                self.trace.append({'kind': 'items_merged', 'into': twin.name, 'dropped': item.name})
+        self.items = merged
+        if not self.items:
+            self.items = [Item('the requested product', '', 1, [])]
+        for pair in _items(brief.get('fits')):
+            if isinstance(pair, dict):
+                part, main = (became.get(_count(pair.get('item')) or 0), became.get(_count(pair.get('with')) or 0))
+                if part and main and (part != main) and (1 <= part <= len(self.items)) and (1 <= main <= len(self.items)) and ((part, main) not in self.bound):
+                    self.bound.append((part, main))
+        for lookup in _items(brief.get('lookups')):
+            text = str(lookup).strip()
+            if not any((text in item.musts for item in self.items)):
+                key = _words(text.split(':')[0])
+                text = next((m for item in self.items for m in item.musts if _words(m.split(':')[0]) == key), text)
+            number = next((n for n, item in enumerate(self.items, 1) if text in item.musts), 1)
+            if text and (number, text) not in self.refs:
+                self.refs.append((number, text))
+        self.unmix()
+        budget = brief.get('budget')
+        if isinstance(budget, str) and re.fullmatch('\\s*\\d+(\\.\\d+)?\\s*', budget):
+            budget = float(budget)
+        if isinstance(budget, (int, float)) and (not isinstance(budget, bool)) and (budget > 0):
+            self.budget = budget
+        limit = _count(brief.get('messages'))
+        if limit is not None and limit >= 0:
+            self.msg_limit = limit
+        elif self.roles.get('ask'):
+            self.msg_limit = 3
+        steps = _count(brief.get('steps'))
+        if steps is not None and 10 <= steps < self.max_steps:
+            self.max_steps = steps
+        for entry in _items(brief.get('process')):
+            if isinstance(entry, dict) and str(entry.get('step') or '').strip():
+                when = str(entry.get('when') or '').strip().lower()
+                self.process.append({'step': str(entry['step']).strip(), 'when': when if when in ('choose', 'order', 'end') else 'order', 'messages': max(0, _count(entry.get('messages')) or 0)})
+        if self.roles.get('ask'):
+            talk = [p['messages'] for p in self.process if p['when'] in ('order', 'end') and p['messages']]
+            self.reserve = min(max(talk), self.msg_limit) if talk else 0
+
+    @staticmethod
+    def shared_shelf(brief: dict[str, Any]) -> bool:
+        shelves = [_words(str(e.get('shelf') or '')) for e in _items(brief.get('items')) if isinstance(e, dict)]
+        shelves = [s for s in shelves if s]
+        return len(shelves) != len(set(shelves))
+
+    def unmix(self) -> None:
+        for number, item in enumerate(self.items, 1):
+            pointers = [need for n, need in self.refs if n == number and need in item.musts]
+            rest = [m for m in item.musts if m not in pointers]
+            if not pointers or not rest:
+                continue
+            prompt = UNMIX + '\n\nREQUEST:\n' + self.request + f'\n\nPRODUCT: {item.name}\nREQUIREMENTS POINTING AT ANOTHER LISTING:\n' + '\n'.join(pointers) + '\nOTHER REQUIREMENTS:\n' + '\n'.join(rest)
+            got = self.ask_json(prompt, [HEAVY, LIGHT], 1500) or {}
+            moved = [m for m in rest if m in [str(x).strip() for x in _items(got.get('describe_other'))]]
+            if not moved:
+                continue
+            item.musts = [m for m in item.musts if m not in moved]
+            joined = pointers[0] + ' (that listing: ' + '; '.join(moved) + ')'
+            item.musts = [joined if m == pointers[0] else m for m in item.musts]
+            self.refs = [(n, joined if (n, need) == (number, pointers[0]) else need) for n, need in self.refs]
+            self.trace.append({'kind': 'unmix', 'item': number, 'moved': moved})
+
+    def described(self, number: int, need: str) -> bool:
+        if need in [m for _, m in self.refs] or need in [str(x) for x in _items(self.brief.get('lookups'))]:
+            return False
+        prop, _, value = need.partition(':')
+        if not prop.strip() or len(re.findall('[a-z0-9]+', value.lower())) < 4:
+            return False
+        if re.search('\\b(?:listing|page|shown|other than|unlike|same as)\\b', value, re.I):
+            return False
+        item = self.items[number - 1]
+        if any(({w for w in _stem(other.name) if len(w) >= 4} & _stem(value) for other in self.items if other is not item)):
+            return False
+        cat_key = self.category_key()
+        keys: set[str] = set()
+        read = 0
+        for record in self.full.values():
+            if cat_key and (not self.owns(item, str(record.get(cat_key) or ''))):
+                continue
+            block = _fact_block(record) or {}
+            if block:
+                read += 1
+                keys |= {_words(k) for k in block}
+        return read >= 3 and (not any((_stem(k) & _stem(prop) for k in keys)))
+
+    def ledger(self) -> str:
+        parts = []
+        many = len(self.items) > 1
+        for number, item in enumerate(self.items, 1):
+            live = [m for m in item.musts + item.told if m not in item.dropped]
+            told = [m for m in live if self.described(number, m)]
+            needs = [m + (f' (the page it points at gives: {self.ref_values[m]})' if m in self.ref_values else '') for m in live if m not in told]
+            head = f'item {number}: {item.name}' if many else f'item: {item.name}'
+            if item.shelf:
+                head += f' (store label: {item.shelf})'
+            head += f', quantity {item.qty}'
+            text = head + '; requirements: ' + ('; '.join(needs) if needs else 'none beyond the kind of product')
+            if told:
+                text += "; described in the shopper's words, which no listing attribute states (decides nothing): " + '; '.join(told)
+            if item.free:
+                text += '; shopper does not mind: ' + ', '.join(item.free)
+            parts.append(text)
+        brief = self.brief
+        if self.budget is not None:
+            scope = 'for each item' if brief.get('budget_scope') == 'each' else 'in total'
+            parts.append(f"budget: at most {self.budget} {brief.get('budget_unit') or ''} {scope}".replace('  ', ' '))
+        pick = brief.get('pick')
+        if pick == 'cheapest':
+            parts.append('pick: the cheapest listing that fits (lowest price)')
+        elif pick in ('most', 'least'):
+            parts.append(f"pick: the {pick} {brief.get('pick_measure') or ''} among fitting listings".replace('  ', ' '))
+        else:
+            parts.append('pick: any listing that fits everything')
+        if brief.get('in_stock_only', True) is not False:
+            parts.append('in stock only')
+        for wish in _items(brief.get('wishes')):
+            parts.append(f'wish (tie-breaker only): {wish}')
+        for rule in _items(brief.get('rules')):
+            parts.append(f'rule from the request: {rule}')
+        if brief.get('quiet_decline') is True:
+            parts.append('if nothing fits: end without naming or suggesting any listing')
+        for entry in self.process:
+            when = {'choose': 'before choosing', 'order': 'at the order (Kyo does it when you check out)', 'end': 'at an ending without a purchase (Kyo does it then)'}[entry['when']]
+            parts.append(f"step the request asks for, {when}: {entry['step']}")
+        facts = self.facts_tool()
+        if facts and (self.facts_from.get(facts) is True or self.roles.get('offer')):
+            bare = sorted((t for t in self.page_tools() | {self.roles.get('offer') or ''} if t and self.facts_from.get(t) is False))
+            pages = sorted((t for t in self.page_tools() if t != facts))
+            parts.append(f'listing attributes come from {facts}' + (f"; {', '.join(bare)} show none" if bare else '') + (f"; a listing's page (what a chain of pages or a page check means) is shown by {' or '.join(pages)}" if pages else ''))
+        return '\n'.join(('- ' + p for p in parts))
+
+    def status(self) -> str:
+        left = self.left()
+        text = f'[Kyo] step {self.step} of {self.max_steps} used, {left} left.'
+        if left <= self.tail() + 1:
+            text += ' FINAL STEPS: check out now when the cart holds a line for each item; end without a purchase only when your search showed that an item has no fitting listing (running out of steps does not show that).'
+        elif left <= 6 or (left <= len(self.items) + 5 and self.buys == 0):
+            text += ' Few steps left: set the cart to the chosen lines and check out now.'
+        elif self.buys == 0 and left <= 12:
+            text += ' Steps are running low: settle on your picks, fill the cart and check out within the next few steps.'
+        elif self.buys == 0 and (not self.cart_touched) and (self.step >= self.max_steps // 2):
+            text += " Half the steps are used and the cart is empty: cart each item's fitting listing now (the store may still sell one out)."
+        live = {need for _, need in self.needs_now()}
+        lookups = [need for _, need in self.refs if need in live and need not in self.ref_values]
+        if lookups and self.buys == 0:
+            text += '\n[resolve first: open the listing each of these points at, and every listing its page refers to; the last page gives the value] ' + ' | '.join(lookups[:3])
+        if self.leads:
+            text += '\n[review candidates] ' + ', '.join(self.leads)
+        plan = self.fit_plan() if self.bound and self.buys == 0 else ''
+        if plan:
+            text += '\n' + plan
+        if self.notes:
+            text += '\n[changes so far] ' + ' | '.join(self.notes[-4:])
+        text += '\n[ledger]\n' + self.ledger()
+        return text
