@@ -205,3 +205,21 @@ def _shape(value: Any, schema: Any, where: str, faults: list[str]) -> Any:
                 faults.append(f'{where}.{name} is required')
         value = {k: _shape(v, props.get(k), f'{where}.{k}', faults) if k in props else v for k, v in value.items()}
     return value
+
+def _items(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, (str, dict)) and value:
+        return [value]
+    return []
+
+def _count(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str) and re.fullmatch('\\s*\\d+(\\.0+)?\\s*', value):
+        return int(float(value))
+    return None
