@@ -409,3 +409,8 @@ class Kyo:
     def tail(self) -> int:
         talk = any((p['when'] == 'order' and p['messages'] > 0 for p in self.process))
         return 2 if talk and self.msg_used < self.msg_limit and self.gate_due('order') else 1
+
+    def judges(self, limit: float=SPEND_SOFT) -> list[str]:
+        if self.cost <= limit and self.cost + HEAVY_ROOM <= SPEND_HARD:
+            return [HEAVY, LIGHT]
+        return [LIGHT] if self.cost <= SPEND_HARD else []
