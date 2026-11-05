@@ -1572,3 +1572,66 @@ class Kyo:
         prompt = HEAR + '\n\nITEMS:\n' + '\n'.join((f'item {n}: {it.name}' for n, it in enumerate(self.items, 1)))
         prompt += '\n\nQUESTIONS AND ANSWERS:\n' + '\n'.join((f'{i}. (about item {n}) Q: {q}\nA: {a}' for i, (n, q, a) in enumerate(sent, 1)))
         return self.ask_json(prompt, list(models), 2500) or {}
+
+    def gate(self, stage: str) -> tuple[bool, str]:
+        steps = [p for p in self.process if p['when'] == stage]
+        if not steps or self.finished or (not self.gate_due(stage)):
+            return (True, '')
+        ending = {self.roles.get('buy'), self.roles.get('refuse')} - {None}
+        tools = [f"- {t['function']['name']}: {t['function'].get('description', '')} | parameters: {_dump(t['function'].get('parameters') or {})}" for t in self.tools if t['function']['name'] not in ending]
+        said: list[str] = []
+        nudged = False
+        for _ in range(GATE_ROUNDS):
+            prompt = GATE.replace('STAGE', 'place the order' if stage == 'order' else 'end without a purchase') + '\n\nREQUEST:\n' + self.request + '\n\nSTEPS DUE NOW:\n' + '\n'.join((f"- {p['step']}" for p in steps)) + '\n\nLEDGER:\n' + self.ledger() + '\n\nCART NOW: ' + self.cart_text() + '\n\nRECORD (messages and step calls so far):\n' + ('\n'.join((f'{i}. {line}' for i, line in enumerate(self.done_log, 1))) or '(nothing yet)') + ('\n\nSTORE NOTES SEEN:\n' + '\n'.join(self.notes[-4:]) if self.notes else '') + f"\n\nMESSAGES LEFT: {max(0, self.msg_limit - self.msg_used)}   STEPS LEFT: {self.left()} (the {('order' if stage == 'order' else 'ending')} itself takes one)" + '\n\nTOOLS:\n' + '\n'.join(tools)
+            got = self.ask_json(prompt, [HEAVY, LIGHT] if nudged else [LIGHT, HEAVY], 3500)
+            if got is None:
+                break
+            told: list[str] = []
+            hold = ''
+            if said:
+                self.take_heard({'needs': got.get('needs')}, told)
+                hold = str(got.get('hold') or '').strip()
+            call = got.get('call') if isinstance(got.get('call'), dict) else None
+            self.trace.append({'kind': 'gate', 'stage': stage, 'call': _clip(call, 200), 'steps': _clip(got.get('steps'), 120), 'hold': hold[:200], 'told': told})
+            if told or hold:
+                self.version += 1
+                return (False, ('Before going on, Kyo did the steps the request asks for:\n' + '\n'.join(said) + '\n' if said else '') + ("The shopper's reply changes the task: " + '; '.join(told + ([hold] if hold else [])) + '. Fix the cart for it, then check out again.'))
+            name = str((call or {}).get('tool') or '')
+            shown = [e for e in _items(got.get('steps')) if isinstance(e, dict)]
+            talk = stage == 'order' and any((p['messages'] > 0 for p in steps))
+            lines = range(1, len(self.done_log) + 1)
+            proof = {i for i in lines if not talk or (i <= len(self.done_steps) and self.done_steps[i - 1] > self.cart_at)}
+            unproven = [e for e in shown if e.get('done') is not True or not any(((_count(n) or 0) in proof for n in _items(e.get('lines'))))]
+            if not call and unproven and (not said) and (not nudged) and self.roles.get('ask') and (self.msg_used < self.msg_limit) and (self.left() >= 2):
+                nudged = True
+                self.trace.append({'kind': 'gate_unproven', 'steps': _clip(unproven, 120)})
+                self.done_log.append(f'(Kyo: no line made since the cart last changed at step {self.cart_at} shows ' + '; '.join((str(e.get('step') or '') for e in unproven))[:200] + f' done, and {self.msg_limit - self.msg_used} message(s) and {self.left()} steps are left: give the call that does it)')
+                self.done_steps.append(-1)
+                continue
+            if not call or name not in self.schemas or name in ending:
+                if not call:
+                    self.gate_ok.add((stage, self.cart_mark() + f'#{self.version}'))
+                break
+            if self.left() < 2 or (name == self.roles.get('ask') and self.msg_used >= self.msg_limit):
+                break
+            faults: list[str] = []
+            args = _shape(call.get('args') if isinstance(call.get('args'), dict) else {}, self.schemas[name], 'args', faults)
+            if faults:
+                break
+            if name == self.roles.get('ask'):
+                text = next((v for v in args.values() if isinstance(v, str)), '')
+                batch = self.send([(1, '', text)], 1)
+                if not batch:
+                    break
+                self.gate_msgs += 1
+                said.append(f'Q: {text}\nA: {batch[0][2]}')
+                continue
+            reply = self.act(name, args)
+            if reply is None:
+                break
+            seen = reply.get('observation')
+            self.absorb(seen)
+            self.done_log.append(f'step {self.step}: {name} {_dump(args)} -> {self.show(seen)[:300]} (cart then: {self.cart_mark()})')
+            self.done_steps.append(self.step)
+            said.append(f'{name} {_dump(args)} -> {self.show(seen)[:400]}')
+        return (True, 'Before going on, Kyo did the steps the request asks for:\n' + '\n'.join(said) if said else '')
