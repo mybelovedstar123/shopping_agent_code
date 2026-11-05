@@ -2001,3 +2001,83 @@ class Kyo:
         if better:
             text += '. Listings that look better: ' + ', '.join(better)
         return text + '. Fix the cart (or show the review is wrong by re-reading the records), then check out.'
+
+    def trail(self) -> tuple[str, bool]:
+        live = {need for _, need in self.needs_now()}
+        pending = [need for _, need in self.refs if need in live and need not in self.ref_values]
+        tool = self.roles.get('offer') or self.roles.get('open')
+        target = self.single_target(tool)
+        seen: list[str] = []
+        lost: list[str] = []
+        while pending and self.trails < (6 if self.left() > 15 else 4) and (self.cost < SPEND_HARD):
+            self.trails += 1
+            records = []
+            for ident in reversed(self.seen_order):
+                record = self.full.get(ident) or self.rows.get(ident) if ident in self.opened else None
+                if record and len(records) < 45:
+                    records.append('OPENED ' + _dump(_clip(record, 300))[:1400])
+            for ident in reversed(self.seen_order):
+                if len(records) >= 60:
+                    break
+                if ident not in self.opened or not (self.full.get(ident) or self.rows.get(ident)):
+                    records.append('ROW ' + _dump(_clip(self.rows.get(ident), 80))[:300])
+            prompt = TRAIL + '\n\nREQUIREMENTS WITH A VALUE ON ANOTHER LISTING:\n' + '\n'.join(pending)
+            prompt += '\n\nRECORDS (newest first):\n' + '\n'.join(records)
+            got = self.ask_json(prompt, [LIGHT] + ([HEAVY] if self.cost + HEAVY_ROOM <= SPEND_HARD else []), 4500) or {}
+            self.trace.append({'kind': 'trail', 'pending': pending, 'got': _clip(got, 150)})
+            reach: list[str] = []
+            lost = []
+            gaps: list[tuple[str, str]] = []
+            for chain in _items(got.get('chains')):
+                if not isinstance(chain, dict):
+                    continue
+                need = next((p for p in pending if p == str(chain.get('need') or '').strip()), None) or (pending[0] if len(pending) == 1 else None)
+                if not need:
+                    continue
+                links = [l for l in _items(chain.get('links')) if isinstance(l, dict)]
+                ids = [str(l.get('id') or '').strip() for l in links]
+                if chain.get('done') is True and links and all((i in self.opened for i in ids)) and str(chain.get('value') or '').strip():
+                    self.ref_values[need] = str(chain['value']).strip()
+                    self.version += 1
+                    continue
+                if links and all((i in self.opened for i in ids)) and (not str(links[-1].get('find') or '').strip()):
+                    self.ref_values[need] = str(chain.get('value') or '').strip() or f'as stated on {ids[-1]}'
+                    self.version += 1
+                    continue
+                closed = [i for i in ids if i in self.rows and i not in self.opened]
+                if closed:
+                    reach += [i for i in closed if i not in reach]
+                else:
+                    gap = next((l for l, i in zip(links, ids) if i not in self.rows), {})
+                    about = str(gap.get('about') or '') or 'the listing it points at'
+                    words = str(gap.get('find') or '').strip()
+                    lost.append(f'{need} -> find {about}' + (f' (search: {words})' if words else ''))
+                    gaps.append((about, words))
+            pending = [p for p in pending if p not in self.ref_values]
+            if not reach and gaps and tool and target and (self.left() > 12) and (self.link_searches < 3):
+                reach = self.find_link(*gaps[0])
+                if self.trace and self.trace[-1].get('kind') == 'link_known':
+                    seen.append(f"{self.trace[-1]['id']}: an opened page of the shop this chain names that shows the values its description gives; read the value from it")
+                    lost = lost[1:]
+            if not reach or not tool or (not target) or (self.left() < len(reach) + 4) or self.finished:
+                break
+            for ident in reach[:max(0, min(3, 6 - len(seen)))]:
+                faults: list[str] = []
+                args = _shape({target: ident}, self.schemas.get(tool), 'args', faults)
+                if faults:
+                    break
+                reply = self.act(tool, args)
+                if reply is None or self.finished:
+                    break
+                self.observe(tool, reply.get('observation'))
+                seen.append(f'{ident}: ' + self.show(reply.get('observation'))[:1500])
+        text = ''
+        if seen:
+            text += '[Kyo opened the pages a requirement points at]\n' + '\n'.join(seen) + '\n'
+        if self.ref_values:
+            text += '[values read from the pages requirements point at] ' + '; '.join((f'{k} -> {v}' for k, v in self.ref_values.items())) + '\n'
+        hold = bool(lost) and self.trail_blocks < (3 if self.left() > 15 else 2) and (self.left() > 5)
+        if hold:
+            self.trail_blocks += 1
+            text += 'The order counts only after every page a requirement points at has been opened in full (a search row is not enough), following each page that refers to a further listing. Still to find and open: ' + ' | '.join(lost[:3]) + ". Search for it by its shop's name together with the values its description gives (the shop's other listings of that kind are not it), open the row of that shop whose page shows those values, apply the value its page gives, then check out."
+        return (text, hold)
