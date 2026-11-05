@@ -2997,3 +2997,20 @@ class Kyo:
                 if index == len(replies) - 1:
                     text += '\n' + self.status()
                 self.chat.append({'role': 'tool', 'tool_call_id': cid, 'content': text})
+
+def agent_main(problem_data: dict[str, Any]) -> list[dict[str, Any]]:
+    try:
+        episode = Kyo(problem_data)
+    except Exception as exc:
+        return [{'kind': 'crash', 'error': f'{type(exc).__name__}: {exc}'[:400]}]
+    try:
+        return episode.run()
+    except Exception as exc:
+        episode.trace.append({'kind': 'crash', 'error': f'{type(exc).__name__}: {exc}'[:400]})
+        try:
+            if not episode.finished:
+                episode.finish()
+        except Exception as again:
+            episode.trace.append({'kind': 'crash', 'error': f'{type(again).__name__}: {again}'[:400]})
+        return episode.trace
+__all__ = ['agent_main']
