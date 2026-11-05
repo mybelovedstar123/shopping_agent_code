@@ -879,3 +879,21 @@ class Kyo:
             if prop.strip() and _words(prop) != name and _stem(prop) & _stem(name) and words and (not words <= shown):
                 return f' [not the stated {prop.strip()}: another property]'
         return ''
+
+    @staticmethod
+    def twins(name: str, spec: dict[str, Any], other: str, slot: dict[str, Any]) -> bool:
+        a, b = (set(name.split()), set(other.split()))
+        if not a or not b or (not a & b):
+            return False
+
+        def agree(x: str, y: str) -> bool:
+            wx, wy = (re.findall('[a-z0-9]+', x.lower()), re.findall('[a-z0-9]+', y.lower()))
+            short, long = (wx, wy) if len(wx) <= len(wy) else (wy, wx)
+            return x == y or (bool(short) and set(short) <= set(long) and (len(long) <= 2 * len(short) + 2))
+        both = [i for i in spec['per'] if i in slot['per'] and spec['per'][i].strip() and slot['per'][i].strip()]
+        same = sum((1 for i in both if agree(spec['per'][i], slot['per'][i])))
+        if not (a <= b or b <= a):
+            return len(both) >= 2 and same == len(both)
+        if both:
+            return same * 2 > len(both)
+        return bool((set(spec['values']) & set(slot['values'])) - {''})
