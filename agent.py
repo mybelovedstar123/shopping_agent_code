@@ -1518,3 +1518,26 @@ class Kyo:
             if name == want:
                 return [v for v in values if v and v not in settled and (len(v) <= 30)][:2]
         return []
+
+    def send(self, questions: list[tuple[int, str, str]], floor: int=6) -> list[tuple[int, str, str]]:
+        tool = self.roles['ask']
+        sent: list[tuple[int, str, str]] = []
+        for number, _, text in questions:
+            if self.finished or self.left() <= floor or self.msg_used >= self.msg_limit:
+                break
+            args = self.message_args(text)
+            if not args:
+                break
+            reply = self.act(tool, args)
+            if reply is None:
+                break
+            self.msg_used += 1
+            answer = reply.get('observation')
+            words = self.spoken(answer)
+            sent.append((number, text, words))
+            self.done_log.append(f'step {self.step}: message to the shopper {text!r} -> reply {words[:300]!r} (cart then: {self.cart_mark()})')
+            self.done_steps.append(self.step)
+            self.trace.append({'kind': 'ask', 'q': text, 'a': words[:300]})
+            if isinstance(answer, dict) and answer.get('error'):
+                break
+        return sent
