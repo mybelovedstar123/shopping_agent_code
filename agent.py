@@ -908,3 +908,12 @@ class Kyo:
         matched = [ids for label, ids in groups.items() if any((_words(label) in (shelf, name) or {w for w in _stem(label) if len(w) >= 4} & long for shelf, name, long in wanted)) or self.owner_of(label)]
         pool = matched or list(groups.values())
         return sorted(pool, key=lambda ids: -len(ids))[:max(1, len(self.items))]
+
+    def single_target(self, tool: str | None) -> str | None:
+        schema = self.schemas.get(tool or '') or {}
+        props = schema.get('properties') or {}
+        texts = [k for k, v in props.items() if isinstance(v, dict) and 'string' in _kinds(v) and ('enum' not in v)]
+        target = next((k for k in schema.get('required') or [] if k in texts), None) or (texts[0] if len(texts) == 1 else None)
+        if not tool or not target or any((k != target for k in schema.get('required') or [])):
+            return None
+        return target
