@@ -19,10 +19,10 @@ Most of the code exists to make that final call reliable under a limited step bu
 | | |
 |---|---|
 | Entry point | `agent_main(problem_data) -> list[dict]` (returns the episode trace) |
-| Language | Python 3.9+ (single module, `agent.py`, ~3k lines) |
+| Language | Python, run on 3.12 (single module, `agent.py`, ~3k lines) |
 | Dependencies | Standard library, plus `src.agent.proxy_client.ProxyClient` from the host harness |
 | Models | `anthropic/claude-haiku-5.5` (light), `anthropic/claude-sonnet-5.5` (heavy), `openai/gpt-6-luna` (spare) |
-| Budget per episode | ≤ 42 agent-loop model calls, ≤ 60 model calls in total, spend ≤ $0.078 |
+| Limits per episode | 42 main-loop model calls and 60 model attempts; the loop stops at 0.078 spend. These are thresholds, not strict ceilings |
 
 ## Repository layout
 
@@ -86,8 +86,8 @@ The agent has no fixed schema for the store. It infers one from the results:
   carry the same values are merged (`twins`).
 - **Result layout:** `read_shape` asks the light model, once per search tool, which
   keys hold the rows, the total count, the next-page token, the price and the stock.
-  `more_pages` then reads up to `AUTO_PAGES` further pages itself when the pick rule
-  needs every match.
+  `more_pages` then reads at most two further pages per search, and `AUTO_PAGES` per
+  episode, for `cheapest`, `most` and `least` requests.
 - **Tool capabilities:** `facts_from` records which tools return attributes and
   which return bare rows. The `open` and `offer` roles are reassigned when the brief
   got them wrong.
@@ -101,8 +101,8 @@ listings are open, or a quarter of the steps are used. It:
    (`CATCH_ALL`) are skipped or asked last.
 2. Has the heavy model choose question lanes (`PLAN`). Guard keys (`GUARD_*`) keep
    high-coverage attributes from being crowded out.
-3. Asks one property per question, and re-asks with example values when an answer is
-   vague. Answers are parsed into new, dropped and "don't mind" requirements (`HEAR`).
+3. Asks one property per question. If the shopper complains that a question asked too
+   much, it asks again with a narrower label or with example values. Answers are parsed into new, dropped and "don't mind" requirements (`HEAR`).
 4. Searches on the newly learned values right away (`value_search`).
 
 ### 4. Guarded tool execution
@@ -123,8 +123,8 @@ step:
 When the model tries to **check out**, Kyo first verifies the cart, in order. It
 returns the first problem it finds instead of buying:
 
-1. **Wider search:** for cheapest-pick requests, a wider search is required while
-   steps remain (`wider_hold`).
+1. **Wider search:** for cheapest-pick requests, one nudge to search more widely while
+   enough steps remain (`wider_hold`).
 2. **Offers and stock:** carted offers are re-read for price or stock changes
    (`reread_offers`), and the cart view is refreshed.
 3. **Sold-out lines:** replacements are proposed for them (`swap_hint`, `SWAP`).
@@ -158,7 +158,8 @@ earlier verdicts.
   leaves `HEAVY_ROOM` before `SPEND_HARD` (`judges`).
 - **Retries:** HTTP 402/408/425/429/5xx from the model are retried with jittered
   backoff (`WAITS`), capped at `WAIT_TOTAL` seconds per episode.
-- **Credit and store errors:** a 402 ends model use for the episode. Store 409
+- **Credit and store errors:** a model 402 stops the main loop and leads to the
+  fallback ending. Store 409
   replies resynchronise the step counter (`expected N`), or mark the episode as
   finished.
 - **History size:** the chat history is kept under `HISTORY_LIMIT` characters by
