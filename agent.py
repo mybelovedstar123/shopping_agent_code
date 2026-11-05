@@ -242,3 +242,12 @@ def _learn_id(rows: list[dict[str, Any]]) -> str | None:
         if best is None or score > best[0]:
             best = (score, key)
     return best[1] if best else None
+
+def _in_rows(node: Any, ident: str, depth: int=0) -> bool:
+    if depth > 5:
+        return False
+    if isinstance(node, list):
+        return any((isinstance(v, dict) and ident in [str(x).strip() for x in v.values() if isinstance(x, str)] for v in node)) or any((_in_rows(v, ident, depth + 1) for v in node))
+    if isinstance(node, dict):
+        return any((_in_rows(v, ident, depth + 1) for v in node.values()))
+    return False
