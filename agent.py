@@ -1126,3 +1126,13 @@ class Kyo:
             pool.sort(key=lambda i: self.price_of(i) or 0.0)
             picks += [i for i in pool[:2] if i not in picks]
         return self.fill_facts(picks[:CHEAPER_OPENS], self.tail() + 4)
+
+    def observe(self, name: str, observation: Any) -> str:
+        self.absorb(observation)
+        lines = self.loose_lines(observation)
+        if not lines:
+            return ''
+        meaning = self.take_note(lines)
+        if meaning:
+            self.queued.append(f'(seen on {name}) {meaning}')
+        return meaning
