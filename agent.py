@@ -811,3 +811,57 @@ class Kyo:
             if best is None or score < best[0]:
                 best = (score, key)
         return best[1] if best else None
+
+    def key_table(self) -> list[tuple[str, str, int, list[str]]]:
+        cat_key = self.category_key()
+        groups: dict[str, dict[str, Any]] = {}
+        for ident in self.seen_order:
+            record = self.full.get(ident)
+            if not record:
+                continue
+            block = _fact_block(record) or {}
+            label = str(record.get(cat_key) or 'listings') if cat_key else 'listings'
+            group = groups.setdefault(label, {'n': 0, 'keys': {}})
+            group['n'] += 1
+            done: set[str] = set()
+            for key, value in block.items():
+                name = _words(key)
+                if not name or name in done:
+                    continue
+                done.add(name)
+                slot = group['keys'].setdefault(name, {'n': 0, 'values': [], 'per': {}})
+                slot['n'] += 1
+                text = str(value).strip().lower()
+                slot['per'][ident] = text
+                if text not in slot['values']:
+                    slot['values'].append(text)
+        wanted = [(_words(item.shelf or ''), _words(item.name), {w for w in _stem(item.shelf or '') | _stem(item.name) if len(w) >= 4}) for item in self.items]
+        matched = {label for label in groups if any((_words(label) in (shelf, name) or {w for w in _stem(label) if len(w) >= 4} & long for shelf, name, long in wanted)) or self.owner_of(label)}
+        if matched:
+            groups = {label: group for label, group in groups.items() if label in matched}
+        table = []
+        for label, group in sorted(groups.items(), key=lambda kv: -kv[1]['n']):
+            kept: list[tuple[str, dict[str, Any]]] = []
+            for name, slot in sorted(group['keys'].items(), key=lambda kv: (-kv[1]['n'], len(kv[0]))):
+                values = list(slot['per'].values())
+                if not values:
+                    continue
+                mean = sum((len(v) for v in values)) / len(values)
+                if mean > 40 or sum((1 for v in values if ' / ' in v)) * 2 >= len(values):
+                    continue
+                recur = sum((len(set(re.findall('[a-z]{3,}', v)) & set(re.findall('[a-z]{3,}', ' '.join((o for o in values if o is not v))))) > 0 for v in values))
+                if len(values) >= 4 and len(set(values)) == len(values) and (mean > 12) and (recur * 2 < len(values)):
+                    continue
+                twin = next((spec for other, spec in kept if self.twins(other, spec, name, slot)), None)
+                if twin is not None:
+                    for ident, text in slot['per'].items():
+                        twin['per'].setdefault(ident, text)
+                        if text not in twin['values']:
+                            twin['values'].append(text)
+                    twin['n'] = len(twin['per'])
+                    continue
+                kept.append((name, slot))
+            kept.sort(key=lambda kv: -kv[1]['n'])
+            for name, slot in kept[:14]:
+                table.append((label, name, slot['n'], [v[:40] for v in slot['values'][:4]]))
+        return table
