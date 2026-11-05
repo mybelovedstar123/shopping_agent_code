@@ -262,3 +262,14 @@ def _fact_block(node: Any) -> dict[str, Any] | None:
             if len(scalars) >= 2 and (best is None or len(scalars) > len(best)):
                 best = scalars
     return best
+
+class Item:
+
+    def __init__(self, name: str, shelf: str, qty: int, musts: list[str]):
+        self.name = name
+        self.shelf = shelf
+        self.qty = qty
+        self.musts = musts
+        self.told: list[str] = []
+        self.dropped: list[str] = []
+        self.free: list[str] = []
