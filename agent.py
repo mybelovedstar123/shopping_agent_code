@@ -625,3 +625,26 @@ class Kyo:
             item.musts = [joined if m == pointers[0] else m for m in item.musts]
             self.refs = [(n, joined if (n, need) == (number, pointers[0]) else need) for n, need in self.refs]
             self.trace.append({'kind': 'unmix', 'item': number, 'moved': moved})
+
+    def described(self, number: int, need: str) -> bool:
+        if need in [m for _, m in self.refs] or need in [str(x) for x in _items(self.brief.get('lookups'))]:
+            return False
+        prop, _, value = need.partition(':')
+        if not prop.strip() or len(re.findall('[a-z0-9]+', value.lower())) < 4:
+            return False
+        if re.search('\\b(?:listing|page|shown|other than|unlike|same as)\\b', value, re.I):
+            return False
+        item = self.items[number - 1]
+        if any(({w for w in _stem(other.name) if len(w) >= 4} & _stem(value) for other in self.items if other is not item)):
+            return False
+        cat_key = self.category_key()
+        keys: set[str] = set()
+        read = 0
+        for record in self.full.values():
+            if cat_key and (not self.owns(item, str(record.get(cat_key) or ''))):
+                continue
+            block = _fact_block(record) or {}
+            if block:
+                read += 1
+                keys |= {_words(k) for k in block}
+        return read >= 3 and (not any((_stem(k) & _stem(prop) for k in keys)))
