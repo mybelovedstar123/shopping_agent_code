@@ -1917,3 +1917,55 @@ class Kyo:
                 if self.budget + 1e-09 < total <= 10 * self.budget:
                     faults.append(f'the total is {total:g}, over the budget of {self.budget:g}')
         return faults
+
+    def count_fixes(self) -> list[tuple[str, int, int]]:
+        cat_key = self.category_key()
+        if not cat_key:
+            return []
+        out = []
+        for ident in self.cart_ids():
+            have = self.held_units(ident) or 0
+            owners = [n for n, item in enumerate(self.items, 1) if self.owns(item, str((self.rows.get(ident) or {}).get(cat_key) or ''))]
+            mine = [i for i in self.cart_ids() if (self.cart_lines.get(i, 1) or 0) > 0 and len(owners) == 1 and self.owns(self.items[owners[0] - 1], str((self.rows.get(i) or {}).get(cat_key) or ''))]
+            if have > 0 and len(owners) == 1 and (len(mine) == 1) and (have != self.items[owners[0] - 1].qty) and (not self.sold_out(ident)):
+                out.append((ident, have, self.items[owners[0] - 1].qty))
+        return out
+
+    def fix_counts(self, wrong: list[tuple[str, int, int]]) -> list[str]:
+        name = self.roles.get('cart') or ''
+        schema = self.schemas.get(name) or {}
+        props = schema.get('properties') or {}
+        texts = [k for k, v in props.items() if isinstance(v, dict) and 'string' in _kinds(v) and ('enum' not in v)]
+        target = next((k for t, k in self.id_args if t == name and k in texts), None) or next((k for k in schema.get('required') or [] if k in texts), None) or (texts[0] if len(texts) == 1 else None)
+        count = next((k for k, v in props.items() if isinstance(v, dict) and 'integer' in _kinds(v)), None)
+        mode = next((k for k, v in props.items() if isinstance(v, dict) and isinstance(v.get('enum'), list) and (len(v['enum']) >= 2)), None)
+        if not name or not target or (not count):
+            return []
+        calls: list[dict[str, Any]] = []
+        for ident, have, want in wrong:
+            if self.cart_sets(name):
+                calls.append({target: ident, count: want})
+            elif mode:
+                options = [str(o) for o in props[mode]['enum']]
+                off = next((o for o in options if re.search('remov|delet|drop|clear|take', o, re.I)), options[1])
+                on = next((o for o in options if o != off), options[0])
+                calls += [{target: ident, mode: off, count: have}, {target: ident, mode: on, count: want}]
+            else:
+                return []
+        if len(calls) + 3 > self.left():
+            return []
+        done = []
+        for args in calls:
+            faults: list[str] = []
+            args = _shape(args, schema, 'args', faults)
+            if faults:
+                break
+            reply = self.act(name, args)
+            if reply is None or self.finished:
+                break
+            self.note_cart(name, args)
+            self.cart_said = _dump(reply.get('observation'))
+            self.observe(name, reply.get('observation'))
+            done.append(_dump(args) + ' -> ' + self.show(reply.get('observation'))[:300])
+        self.trace.append({'kind': 'count_fix', 'calls': done})
+        return done
