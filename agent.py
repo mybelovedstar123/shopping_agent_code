@@ -101,3 +101,18 @@ def _json_obj(text: Any) -> dict[str, Any] | None:
         except ValueError:
             return None
     return None
+
+def _words(key: str) -> str:
+    key = re.sub('([a-z0-9])([A-Z])', '\\1 \\2', str(key))
+    return re.sub('[\\s_.\\-]+', ' ', key).strip().lower()
+
+def _stem(text: str) -> frozenset[str]:
+    return frozenset((w[:-1] if len(w) > 3 and w.endswith('s') else w for w in _words(text).split()))
+
+def _roots(text: str) -> set[str]:
+    out = set()
+    for w in _words(text).split():
+        w = w[:-2] if re.search('(?:ch|sh|ss|x|z)es$', w) else w[:-1] if len(w) > 3 and w.endswith('s') and (not w.endswith('ss')) else w
+        if len(w) >= 3 and w not in ('and', 'for', 'the', 'with'):
+            out.add(w)
+    return out
