@@ -478,3 +478,44 @@ class Kyo:
             if self.broke or self.no_credit or self.calls >= ALL_CALLS:
                 return None
         return None
+
+    def act(self, name: str, args: dict[str, Any]) -> dict[str, Any] | None:
+        payload = dict(self.binding)
+        payload['step'] = self.step + 1
+        payload['action'] = {'name': name, 'args': args}
+        for _ in range(4):
+            result = _env.post_verbose('/environment/call', payload)
+            if isinstance(result.data, dict):
+                data = result.data
+                self.step = data['step'] if isinstance(data.get('step'), int) else self.step + 1
+                if data.get('finished'):
+                    self.finished = True
+                seen = data.get('observation')
+                if name in self.page_tools() and (not (isinstance(seen, dict) and seen.get('error'))):
+                    for value in args.values():
+                        self.opened.update((v.strip() for v in (value if isinstance(value, list) else [value]) if isinstance(v, str)))
+                return data
+            error = result.error or {}
+            status = error.get('status')
+            body = str(error.get('body') or '')
+            self.trace.append({'kind': 'env_fail', 'status': status, 'body': body[:200]})
+            if status == 409:
+                low = body.lower()
+                if 'finish' in low or 'quarantin' in low or 'finaliz' in low:
+                    self.finished = True
+                    return None
+                found = re.search('expected (\\d+)', body)
+                if found:
+                    self.step = int(found.group(1)) - 1
+                    payload['step'] = self.step + 1
+                    continue
+                if 'reuse' in low or 'different action' in low:
+                    self.step += 1
+                    payload['step'] = self.step + 1
+                    continue
+                return None
+            if status in (400, 401, 402, 403, 404, 422):
+                if status == 402:
+                    self.broke = True
+                return None
+        return None
