@@ -1180,3 +1180,26 @@ class Kyo:
                     reply = self.act(tool, args)
                     if reply is not None:
                         self.observe(tool, reply.get('observation'))
+
+    def widen_singly(self) -> None:
+        tool = self.facts_tool()
+        target = self.single_target(tool)
+        if not tool or not target:
+            return
+        wanted = {w for _, need in self.needs_now() for w in re.findall('[a-z0-9]{3,}', need.split(':', 1)[-1].lower())}
+        each = WIDEN_EACH if len(self.items) <= 2 else 4
+        lanes: list[list[str]] = []
+        heads: list[int] = []
+        for ids in self.item_groups():
+            opened = sum((1 for i in ids if i in self.full))
+            pool = [i for i in ids if i not in self.full and self.buyable(i)]
+            if self.brief.get('pick') == 'cheapest':
+                pool.sort(key=lambda i: self.price_of(i) if self.price_of(i) is not None else float('inf'))
+            pool.sort(key=lambda i: -len(wanted & set(re.findall('[a-z0-9]{3,}', _dump(self.rows.get(i) or {}).lower()))))
+            lanes.append(pool[:max(0, each - opened)])
+            heads.append(max(0, 4 - opened))
+        first = [lane[k] for k in range(4) for lane, head in zip(lanes, heads) if k < min(head, len(lane))]
+        more = [lane[k] for k in range(each) for lane, head in zip(lanes, heads) if head <= k < len(lane)]
+        cap = max(5, 2 * len(lanes) + 2)
+        read = self.fill_facts(first[:cap][:8], 22)
+        self.fill_facts((first[cap:] + more)[:max(0, 10 - len(read))], 30)
