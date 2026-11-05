@@ -1728,3 +1728,40 @@ class Kyo:
                 if need not in item.dropped:
                     out.append((number, need))
         return out
+
+    def evidence(self, observation: Any) -> str:
+        ids: list[str] = []
+
+        def walk(node: Any, depth: int) -> None:
+            if depth > 6:
+                return
+            if isinstance(node, dict):
+                ident = self.ident(node, False, depth)
+                if ident and _fact_block(node) and (ident not in ids):
+                    ids.append(ident)
+                    return
+                for value in node.values():
+                    walk(value, depth + 1)
+            elif isinstance(node, list):
+                for value in node:
+                    walk(value, depth + 1)
+        walk(observation, 0)
+        needs = self.needs_now()
+        if not ids or not needs:
+            return ''
+        many = len(self.items) > 1
+        lines = []
+        for ident in ids[:12]:
+            block = _fact_block(self.full.get(ident) or {}) or {}
+            parts = []
+            for number, need in needs[:8]:
+                prop = need.split(':', 1)[0].strip()
+                hits = [f'{k}={str(v)[:50]}' for k, v in block.items() if _names(_stem(prop), _stem(k))]
+                tag = f'(item {number}) ' if many else ''
+                if hits:
+                    parts.append(f'{tag}{prop} -> ' + ', '.join(hits[:3]))
+            if parts:
+                lines.append(f'{ident}: ' + '; '.join(parts))
+        if not lines:
+            return ''
+        return "[evidence: keys whose names contain a requirement's property; one naming a different property (another part or aspect) decides nothing, and a key with another name may still hold the same property] " + ' | '.join(lines)
