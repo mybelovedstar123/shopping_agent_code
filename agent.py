@@ -2141,3 +2141,37 @@ class Kyo:
         def of_kind(ids: list[str]) -> list[str]:
             return [i for i in ids if not kind or kind & set(re.findall('[a-z0-9]{3,}', _dump(self.rows.get(i) or {}).lower()))]
         return (of_kind(known) or of_kind(self.shop_rows(about, list(reversed(self.seen_order)))))[:2]
+
+    def offer_tool(self) -> str | None:
+        return self.roles.get('offer') or self.roles.get('open')
+
+    def reread_offers(self) -> str:
+        tool = self.offer_tool()
+        target = self.single_target(tool)
+        if not tool or not target:
+            return ''
+        since = max(self.step - 2, self.refused_at)
+        stale = [i for i in self.cart_ids() if self.offer_seen.get(i, -99) < since and i not in self.gone]
+        if not stale or self.left() < len(stale) + 3:
+            return ''
+        lines = []
+        for ident in stale:
+            faults: list[str] = []
+            args = _shape({target: ident}, self.schemas.get(tool), 'args', faults)
+            if faults:
+                break
+            before = dict(self.rows.get(ident) or {})
+            reply = self.act(tool, args)
+            if reply is None or self.finished:
+                break
+            observation = reply.get('observation')
+            self.offer_seen[ident] = self.step
+            self.observe(tool, observation)
+            after = self.rows.get(ident) or {}
+            moved = [k for k, v in after.items() if k in before and before[k] != v and (not isinstance(v, (dict, list)))]
+            if moved:
+                lines.append(f"{ident} changed ({', '.join(moved[:4])}): {_dump(_clip(observation, 300))[:900]}")
+        self.trace.append({'kind': 'reread', 'ids': stale, 'changed': len(lines)})
+        if lines:
+            self.version += 1
+        return '\n'.join(lines)
