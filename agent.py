@@ -468,3 +468,13 @@ class Kyo:
             error = {'body': data['error'].get('message')}
         self.trace.append({'kind': 'llm_fail', 'model': model, 'status': status, 'body': str(error.get('body') or '')[:200]})
         return (None, status)
+
+    def ask_json(self, prompt: str, models: list[str], max_tokens: int=1800) -> dict[str, Any] | None:
+        for model in models:
+            message = self.think([{'role': 'user', 'content': prompt}], [model], max_tokens)
+            got = _json_obj((message or {}).get('content'))
+            if got is not None:
+                return got
+            if self.broke or self.no_credit or self.calls >= ALL_CALLS:
+                return None
+        return None
