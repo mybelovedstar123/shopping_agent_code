@@ -2336,3 +2336,76 @@ class Kyo:
                 return None
             calls.append({target: ident, **({mode: props[mode]['enum'][0]} if mode else {}), **({count: want} if count else {})})
         return calls
+
+    def complete_cart(self) -> str:
+        cart, buy = (self.roles.get('cart'), self.roles.get('buy'))
+        if self.completed or not self.confirmed or self.sold_out(self.confirmed) or (not cart) or (not buy):
+            return ''
+        self.completed = True
+        cat_key = self.category_key()
+
+        def kind(ident: str) -> str:
+            return str((self.rows.get(ident) or {}).get(cat_key) or '').strip().lower() if cat_key else ident
+        plan: dict[str, int] = {}
+        for number, ids in self.lead_items.items():
+            index = _count(number)
+            pick = next((i for i in ids if not self.sold_out(i)), None)
+            if pick and index and (1 <= index <= len(self.items)) and (kind(pick) not in {kind(p) for p in plan}):
+                plan[pick] = self.items[index - 1].qty
+        if self.confirmed not in plan:
+            return ''
+        now = self.cart_ids()
+        keep = {i: self.cart_lines.get(i, 1) for i in now if i not in plan and (not self.sold_out(i)) and (kind(i) not in {kind(p) for p in plan})}
+        drop = [i for i in now if i not in plan and i not in keep]
+        if len(plan) + len({kind(i) for i in keep}) < len(self.items):
+            return ''
+        lines = {**keep, **plan}
+        calls = self.cart_calls(lines, drop)
+        if not calls or len(calls) + 1 > self.left():
+            return ''
+        self.fill_facts(list(lines), len(calls) + 3)
+        self.check_cart(list(lines), SPEND_HARD)
+        if not self.verdicts.get(self.check_key(list(lines))):
+            return ''
+        done = []
+        for args in calls:
+            faults: list[str] = []
+            args = _shape(args, self.schemas.get(cart), 'args', faults)
+            if faults:
+                return ''
+            reply = self.act(cart, args)
+            if reply is None or self.finished:
+                return ''
+            self.note_cart(cart, args)
+            self.observe(cart, reply.get('observation'))
+            done.append(_dump(args))
+        faults = []
+        args = _shape(dict(self.brief.get('buy_args') or {}), self.schemas.get(buy), 'args', faults)
+        if faults:
+            return ''
+        replies = []
+        for attempt in range(2):
+            if attempt:
+                self.reread_offers()
+                self.check_cart(list(lines), SPEND_HARD)
+                if not self.verdicts.get(self.check_key(list(lines))) or self.left() < 1 or self.finished or any((self.sold_out(i) for i in lines)):
+                    break
+            go, said = self.gate('order')
+            if said:
+                replies.append(said)
+            if not go:
+                break
+            reply = self.act(buy, args)
+            self.trace.append({'kind': 'completed', 'lines': lines, 'drop': drop, 'reply': _clip(reply, 200)})
+            if reply is None:
+                break
+            self.buys += 1
+            if not reply.get('finished'):
+                self.refused_at = self.step
+            self.observe(buy, reply.get('observation'))
+            replies.append(self.show(reply.get('observation')))
+            if self.finished or reply.get('finished'):
+                break
+        if not replies:
+            return ''
+        return 'Not run (Kyo acted instead): the independent check confirmed ' + self.confirmed + ', so Kyo set the cart (' + '; '.join(done) + ') and checked out. Store reply: ' + ' | then: '.join(replies)
