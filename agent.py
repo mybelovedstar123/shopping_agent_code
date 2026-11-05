@@ -719,3 +719,28 @@ class Kyo:
             text += '\n[changes so far] ' + ' | '.join(self.notes[-4:])
         text += '\n[ledger]\n' + self.ledger()
         return text
+
+    def ident(self, node: Any, in_list: bool=False, depth: int=0) -> str | None:
+        if not isinstance(node, dict) or len(node) < 3:
+            return None
+        if self.id_key and _id_like(node.get(self.id_key), True):
+            return node[self.id_key].strip()
+        nested = any((isinstance(v, dict) for v in node.values()))
+        if not (in_list or depth == 0 or nested):
+            return None
+        found = _learn_id([node])
+        if found and ('id' in str(found).lower() or node[found].strip() in self.rows):
+            return node[found].strip()
+        return None
+
+    def learn_rows(self, node: list[Any]) -> bool:
+        rows = [n for n in node if isinstance(n, dict) and len(n) >= 3]
+        if not rows or len(rows) < len(node) / 2:
+            return False
+        if self.id_key and all((_id_like(r.get(self.id_key), True) for r in rows)):
+            return True
+        found = _learn_id(rows)
+        if found:
+            self.id_key = found
+            return True
+        return False
