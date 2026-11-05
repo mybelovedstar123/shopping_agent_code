@@ -1791,3 +1791,21 @@ class Kyo:
             text = _dump(self.cart_view)
             return [i for i in self.rows if i in text]
         return list(self.cart_lines)
+
+    def record_of(self, ident: str) -> str:
+        record = self.full.get(ident) or self.rows.get(ident)
+        return _dump(_clip(record, 400))[:3000] if record else '(no record seen)'
+
+    def others(self, skip: list[str], limit: int=30) -> str:
+        lines = []
+        order = list(reversed(self.seen_order))
+        if self.brief.get('pick') == 'cheapest':
+            order.sort(key=lambda i: (i not in self.full, self.price_of(i) if self.price_of(i) is not None else float('inf')))
+        for ident in order:
+            if ident in skip or self.sold_out(ident):
+                continue
+            record = self.full.get(ident) or self.rows.get(ident)
+            lines.append(_dump(_clip(record, 160))[:900])
+            if len(lines) >= limit:
+                break
+        return '\n'.join(lines)
