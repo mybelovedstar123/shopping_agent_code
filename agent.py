@@ -121,3 +121,26 @@ def _names(prop: frozenset[str], key: frozenset[str]) -> bool:
     if not prop or not key:
         return False
     return prop == key or prop <= key or (len(key) >= 2 and key <= prop)
+
+def _kinds(schema: dict[str, Any]) -> list[str]:
+    kind = schema.get('type')
+    if isinstance(kind, str):
+        return [kind]
+    return [k for k in kind or [] if isinstance(k, str)]
+
+def _fits_kind(value: Any, kind: str) -> bool:
+    if kind == 'string':
+        return isinstance(value, str)
+    if kind == 'integer':
+        return isinstance(value, int) and (not isinstance(value, bool))
+    if kind == 'number':
+        return isinstance(value, (int, float)) and (not isinstance(value, bool))
+    if kind == 'boolean':
+        return isinstance(value, bool)
+    if kind == 'array':
+        return isinstance(value, list)
+    if kind == 'object':
+        return isinstance(value, dict)
+    if kind == 'null':
+        return value is None
+    return True
