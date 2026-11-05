@@ -1401,3 +1401,29 @@ class Kyo:
         rows.sort(key=lambda r: (-r[2], measured.get(r[1], False), -r[3]))
         keys = [key for _, key, _, _ in rows if not any((_names(prop, _stem(key)) for prop in settled)) and (not re.search(NOT_PROPERTY, key))]
         return [key for key in keys if not re.search(CATCH_ALL, key)] + [key for key in keys if re.search(CATCH_ALL, key)]
+
+    def owner_of(self, label: str) -> int:
+        if not label:
+            return 0
+        words = _words(label)
+        long = _roots(label)
+        best, top = (0, 0.0)
+        for number, item in enumerate(self.items, 1):
+            if words == _words(item.shelf or ''):
+                score = 3.0
+            elif words == _words(item.name):
+                score = 2.0
+            else:
+                mine = _roots(item.shelf or '') | _roots(item.name)
+                score = len(long & mine) / max(1, len(long | mine))
+            if score > top:
+                best, top = (number, score)
+        return best
+
+    def owns(self, item: Item, label: str) -> bool:
+        return bool(label) and item in self.items and (self.owner_of(label) == self.items.index(item) + 1)
+
+    def records_of_item(self, number: int) -> int:
+        cat_key = self.category_key()
+        item = self.items[number - 1]
+        return sum((1 for record in self.full.values() if cat_key and self.owns(item, str(record.get(cat_key) or '')) and _fact_block(record)))
