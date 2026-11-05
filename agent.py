@@ -63,3 +63,9 @@ def _fit_marks(text: Any) -> dict[str, Any]:
     also = [(hit.group(1).upper(), _codes(hit.group(2))) for hit in re.finditer('\\bpart\\s+(' + PART_CODE + ')\\s+also fits\\s*:?\\s*([^.;]+)', text, re.I)]
     more = re.search('\\b(?:more|details|see|read)\\s+(?:on|at|under|about)?\\s*(?:the\\s+)?part\\s+(' + PART_CODE + ')', text, re.I)
     return {'own': own.group(1).upper() if own else '', 'codes': codes, 'works': works, 'also': also, 'more': more.group(1).upper() if more else ''}
+
+def _dump(value: Any) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, separators=(',', ':'))
+    except (TypeError, ValueError):
+        return str(value)
