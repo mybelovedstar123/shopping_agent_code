@@ -648,3 +648,49 @@ class Kyo:
                 read += 1
                 keys |= {_words(k) for k in block}
         return read >= 3 and (not any((_stem(k) & _stem(prop) for k in keys)))
+
+    def ledger(self) -> str:
+        parts = []
+        many = len(self.items) > 1
+        for number, item in enumerate(self.items, 1):
+            live = [m for m in item.musts + item.told if m not in item.dropped]
+            told = [m for m in live if self.described(number, m)]
+            needs = [m + (f' (the page it points at gives: {self.ref_values[m]})' if m in self.ref_values else '') for m in live if m not in told]
+            head = f'item {number}: {item.name}' if many else f'item: {item.name}'
+            if item.shelf:
+                head += f' (store label: {item.shelf})'
+            head += f', quantity {item.qty}'
+            text = head + '; requirements: ' + ('; '.join(needs) if needs else 'none beyond the kind of product')
+            if told:
+                text += "; described in the shopper's words, which no listing attribute states (decides nothing): " + '; '.join(told)
+            if item.free:
+                text += '; shopper does not mind: ' + ', '.join(item.free)
+            parts.append(text)
+        brief = self.brief
+        if self.budget is not None:
+            scope = 'for each item' if brief.get('budget_scope') == 'each' else 'in total'
+            parts.append(f"budget: at most {self.budget} {brief.get('budget_unit') or ''} {scope}".replace('  ', ' '))
+        pick = brief.get('pick')
+        if pick == 'cheapest':
+            parts.append('pick: the cheapest listing that fits (lowest price)')
+        elif pick in ('most', 'least'):
+            parts.append(f"pick: the {pick} {brief.get('pick_measure') or ''} among fitting listings".replace('  ', ' '))
+        else:
+            parts.append('pick: any listing that fits everything')
+        if brief.get('in_stock_only', True) is not False:
+            parts.append('in stock only')
+        for wish in _items(brief.get('wishes')):
+            parts.append(f'wish (tie-breaker only): {wish}')
+        for rule in _items(brief.get('rules')):
+            parts.append(f'rule from the request: {rule}')
+        if brief.get('quiet_decline') is True:
+            parts.append('if nothing fits: end without naming or suggesting any listing')
+        for entry in self.process:
+            when = {'choose': 'before choosing', 'order': 'at the order (Kyo does it when you check out)', 'end': 'at an ending without a purchase (Kyo does it then)'}[entry['when']]
+            parts.append(f"step the request asks for, {when}: {entry['step']}")
+        facts = self.facts_tool()
+        if facts and (self.facts_from.get(facts) is True or self.roles.get('offer')):
+            bare = sorted((t for t in self.page_tools() | {self.roles.get('offer') or ''} if t and self.facts_from.get(t) is False))
+            pages = sorted((t for t in self.page_tools() if t != facts))
+            parts.append(f'listing attributes come from {facts}' + (f"; {', '.join(bare)} show none" if bare else '') + (f"; a listing's page (what a chain of pages or a page check means) is shown by {' or '.join(pages)}" if pages else ''))
+        return '\n'.join(('- ' + p for p in parts))
