@@ -1720,3 +1720,11 @@ class Kyo:
             self.recent = []
             self.notes.append(summary or '; '.join(changed))
         return (summary + (' (' + '; '.join(changed) + ')' if changed else '')).strip()
+
+    def needs_now(self) -> list[tuple[int, str]]:
+        out = []
+        for number, item in enumerate(self.items, 1):
+            for need in item.musts + item.told:
+                if need not in item.dropped:
+                    out.append((number, need))
+        return out
