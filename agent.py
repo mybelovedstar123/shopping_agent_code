@@ -414,3 +414,25 @@ class Kyo:
         if self.cost <= limit and self.cost + HEAVY_ROOM <= SPEND_HARD:
             return [HEAVY, LIGHT]
         return [LIGHT] if self.cost <= SPEND_HARD else []
+
+    def think(self, messages: list[dict[str, Any]], models: list[str], max_tokens: int, tools: list[dict[str, Any]] | None=None) -> dict[str, Any] | None:
+        for model in models:
+            if self.calls >= ALL_CALLS:
+                return None
+            self.calls += 1
+            tries = 0
+            while True:
+                message, status = self.call_model(model, messages, max_tokens, tools)
+                if message is not None:
+                    return message
+                passing = status is None or status in (402, 408, 425, 429) or (isinstance(status, int) and status >= 500)
+                if not passing or tries >= (1 if status in (None, 408) else len(WAITS)) or self.waited + WAITS[tries] > WAIT_TOTAL:
+                    break
+                pause = WAITS[tries] * (0.8 + 0.4 * random.random())
+                self.waited += WAITS[tries]
+                tries += 1
+                time.sleep(pause)
+            if status == 402:
+                self.no_credit = True
+                return None
+        return None
