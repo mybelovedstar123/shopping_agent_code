@@ -2542,3 +2542,48 @@ class Kyo:
         if len(text) > OBS_LIMIT:
             text = text[:OBS_LIMIT] + '...(cut)'
         return text
+
+    def compare_target(self) -> str | None:
+        schema = self.schemas.get(self.roles.get('compare') or '') or {}
+        props = schema.get('properties') or {}
+        target = next((k for k, v in props.items() if isinstance(v, dict) and 'array' in _kinds(v)), None)
+        if not target or any((k != target for k in schema.get('required') or [])):
+            return None
+        return target
+
+    def compare_room(self) -> int:
+        spec = ((self.schemas.get(self.roles.get('compare') or '') or {}).get('properties') or {}).get(self.compare_target() or '') or {}
+        if isinstance(spec.get('maxItems'), int):
+            return spec['maxItems']
+        if self.compare_bad:
+            return max(2, min(self.compare_bad - 1, max(self.compare_ok, 2)))
+        return max(4, self.compare_ok)
+
+    def join_opens(self, calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        opener, joiner, target = (self.roles.get('open'), self.roles.get('compare'), self.single_target(self.roles.get('open')))
+        many = self.compare_target()
+        if not opener or not joiner or (not target) or (not many) or (opener == joiner):
+            return calls
+        if self.compare_bare():
+            return calls
+        picks: list[tuple[int, str]] = []
+        for index, call in enumerate(calls):
+            fn = call.get('function') or {}
+            args = _json_obj(fn.get('arguments')) if isinstance(fn.get('arguments'), str) else None
+            ident = str((args or {}).get(target) or '').strip()
+            if fn.get('name') == opener and args and (set(args) == {target}) and (ident in self.rows) and (ident not in self.gone):
+                picks.append((index, ident))
+        picks = picks[:self.compare_room()]
+        if len(picks) < 2:
+            return calls
+        first = picks[0][0]
+        out = []
+        for index, call in enumerate(calls):
+            if index == first:
+                out.append({'id': call['id'], 'type': 'function', 'function': {'name': joiner, 'arguments': _dump({many: [i for _, i in picks]})}})
+            elif index in {i for i, _ in picks}:
+                out.append({'id': call['id'], 'joined': True})
+            else:
+                out.append(call)
+        self.trace.append({'kind': 'joined', 'ids': [i for _, i in picks]})
+        return out
