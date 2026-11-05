@@ -69,3 +69,14 @@ def _dump(value: Any) -> str:
         return json.dumps(value, ensure_ascii=False, separators=(',', ':'))
     except (TypeError, ValueError):
         return str(value)
+
+def _clip(value: Any, limit: int, depth: int=0) -> Any:
+    if depth > 7:
+        return '...'
+    if isinstance(value, str):
+        return value if len(value) <= limit else value[:limit] + '...'
+    if isinstance(value, dict):
+        return {k: _clip(v, limit, depth + 1) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_clip(v, limit, depth + 1) for v in value]
+    return value
