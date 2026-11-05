@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kyo-shop"
+version = "0.1.0"
+description = "A team of independent shopping agents and the store they shop in"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.13"]
+
+[tool.setuptools.packages.find]
+include = ["kyo*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+extend-exclude = ["agent.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
