@@ -2231,3 +2231,69 @@ class Kyo:
         ranked = [i for _, i in sorted(fits, key=lambda f: f[0])] if self.brief.get('pick') == 'cheapest' else [i for _, i in fits]
         self.trace.append({'kind': 'swap', 'lost': lost, 'fits': fits})
         return ranked[:4]
+
+    def audit(self) -> str:
+        if self.audited or not self.judges():
+            return ''
+        self.audited = True
+        got = self.audit_call()
+        named = self.audit_fits(got)
+        if not named:
+            rows = [str(i) for i in _items((got or {}).get('open')) if str(i) in self.rows and str(i) not in self.opened and (not self.sold_out(str(i)))]
+            if rows and self.open_rows(rows):
+                got = self.audit_call()
+                named = self.audit_fits(got)
+        if not named:
+            return ''
+        self.lead_items = named
+        self.leads = [i for ids in named.values() for i in ids]
+        return 'A careful review thinks these listings may fit: ' + '; '.join((f"item {k}: {', '.join(v)}" for k, v in named.items())) + (f" ({got.get('reason')})" if got.get('reason') else '') + '. Open them and buy what truly fits; end without a purchase only if each one fails.'
+
+    def audit_call(self) -> dict[str, Any] | None:
+        records = []
+        for ident in reversed(self.seen_order):
+            if self.sold_out(ident):
+                continue
+            record = self.full.get(ident) if ident in self.full else None
+            records.append('OPENED ' + _dump(_clip(record, 200))[:1200] if record else 'ROW ' + _dump(_clip(self.rows.get(ident), 120))[:500])
+            if len(records) >= 30:
+                break
+        if not records:
+            return None
+        prompt = AUDIT + '\n\nREQUEST:\n' + self.request + '\n\nREQUIREMENTS IN FORCE:\n' + self.ledger()
+        prompt += '\n\nLISTING RECORDS SEEN (newest first):\n' + '\n'.join(records)
+        got = self.ask_json(prompt, self.judges(), 4000)
+        self.trace.append({'kind': 'audit', 'got': got})
+        return got
+
+    def audit_fits(self, got: dict[str, Any] | None) -> dict[str, list[str]]:
+        fits = (got or {}).get('fits')
+        if not isinstance(fits, dict):
+            return {}
+        named = {str(k): [str(i) for i in _items(v) if str(i) in self.rows and (not self.sold_out(str(i)))][:4] for k, v in fits.items()}
+        return {k: v for k, v in named.items() if v}
+
+    def open_rows(self, rows: list[str]) -> bool:
+        many, joiner = (self.compare_target(), self.roles.get('compare'))
+        tool = self.facts_tool()
+        target = self.single_target(tool)
+        if many and joiner and (not self.compare_bare()):
+            plan = [(joiner, {many: rows[:self.compare_room()]})]
+        elif tool and target:
+            plan = [(tool, {target: i}) for i in rows[:2]]
+        else:
+            return False
+        if self.left() < len(plan) + 5:
+            return False
+        before = len(self.full)
+        for name, args in plan:
+            faults: list[str] = []
+            args = _shape(args, self.schemas.get(name), 'args', faults)
+            if faults:
+                return False
+            reply = self.act(name, args)
+            if reply is None or self.finished:
+                break
+            self.observe(name, reply.get('observation'))
+        self.trace.append({'kind': 'audit_open', 'rows': rows, 'opened': len(self.full) - before})
+        return len(self.full) > before
