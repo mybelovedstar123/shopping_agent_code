@@ -2485,3 +2485,54 @@ class Kyo:
                 return (args, problem)
             out[key] = [v for v, _ in fixed] if isinstance(args[key], list) else fixed[0][0]
         return (out, '')
+
+    def cart_sets(self, name: str) -> bool:
+        props = self.schemas.get(name, {}).get('properties') or {}
+        if any((isinstance(s, dict) and isinstance(s.get('enum'), list) and (len(s['enum']) >= 2) for s in props.values())):
+            return False
+        return any((isinstance(s, dict) and 'integer' in _kinds(s) and (s.get('minimum') == 0) for s in props.values()))
+
+    def note_cart(self, name: str, args: dict[str, Any]) -> None:
+        self.cart_touched = True
+        self.cart_at = self.step
+        spec = self.schemas.get(name, {}).get('properties') or {}
+        removal = False
+        for key, value in args.items():
+            options = (spec.get(key) or {}).get('enum')
+            if isinstance(options, list) and len(options) >= 2 and (value in options[1:]):
+                removal = True
+        loose_count = next((_count(v) for v in args.values() if _count(v) is not None and (not isinstance(v, str))), None)
+        lines: list[tuple[str, int | None]] = []
+        whole = False
+        for key, value in args.items():
+            if isinstance(value, list):
+                shape = (spec.get(key) or {}).get('items') or {}
+                if not value and isinstance(shape, dict) and (shape.get('type') == 'object' or 'properties' in shape):
+                    whole = True
+                for line in value:
+                    if isinstance(line, dict):
+                        whole = True
+                        ident = next((v for v in line.values() if isinstance(v, str) and v in self.rows), None)
+                        count = next((_count(v) for v in line.values() if _count(v) is not None and (not isinstance(v, str))), 1)
+                        if ident:
+                            lines.append((ident, count))
+                    elif isinstance(line, str) and line in self.rows:
+                        lines.append((line, loose_count))
+            elif isinstance(value, str) and value in self.rows:
+                lines.append((value, loose_count))
+        if whole:
+            self.cart_lines = {i: c for i, c in lines if c and c > 0}
+            return
+        sets = self.cart_sets(name)
+        for ident, count in lines:
+            have = self.cart_lines.get(ident, 0)
+            if removal:
+                have = have - count if count else 0
+            elif sets:
+                have = count if count is not None else 1
+            else:
+                have = have + (count if count is not None else 1)
+            if have > 0:
+                self.cart_lines[ident] = have
+            else:
+                self.cart_lines.pop(ident, None)
