@@ -2297,3 +2297,42 @@ class Kyo:
             self.observe(name, reply.get('observation'))
         self.trace.append({'kind': 'audit_open', 'rows': rows, 'opened': len(self.full) - before})
         return len(self.full) > before
+
+    def cart_calls(self, lines: dict[str, int], drop: list[str]) -> list[dict[str, Any]] | None:
+        name = self.roles.get('cart') or ''
+        schema = self.schemas.get(name) or {}
+        props = schema.get('properties') or {}
+        for key, spec in props.items():
+            shape = spec.get('items') if isinstance(spec, dict) and 'array' in _kinds(spec) else None
+            if isinstance(shape, dict) and isinstance(shape.get('properties'), dict):
+                inner = shape['properties']
+                id_key = next((k for k, s in inner.items() if isinstance(s, dict) and 'string' in _kinds(s) and ('enum' not in s)), None)
+                count_key = next((k for k, s in inner.items() if isinstance(s, dict) and 'integer' in _kinds(s)), None)
+                if not id_key:
+                    return None
+                return [{key: [{id_key: i, **({count_key: n} if count_key else {})} for i, n in lines.items()]}]
+        texts = [k for k, s in props.items() if isinstance(s, dict) and 'string' in _kinds(s) and ('enum' not in s)]
+        target = next((k for t, k in self.id_args if t == name and k in texts), None) or next((k for k in schema.get('required') or [] if k in texts), None) or (texts[0] if len(texts) == 1 else None)
+        count = next((k for k, s in props.items() if isinstance(s, dict) and 'integer' in _kinds(s)), None)
+        mode = next((k for k, s in props.items() if isinstance(s, dict) and isinstance(s.get('enum'), list) and (len(s['enum']) >= 2)), None)
+        if not target:
+            return None
+        calls: list[dict[str, Any]] = []
+        for ident in drop:
+            have = self.cart_lines.get(ident, 1)
+            if mode:
+                calls.append({target: ident, mode: props[mode]['enum'][1], **({count: have} if count else {})})
+            elif count and self.cart_sets(name):
+                calls.append({target: ident, count: 0})
+            elif count and isinstance(props[count].get('minimum'), int) and (props[count]['minimum'] <= -have):
+                calls.append({target: ident, count: -have})
+            else:
+                return None
+        for ident, want in lines.items():
+            have = self.cart_lines.get(ident, 0) if ident in self.cart_ids() else 0
+            if have == want:
+                continue
+            if have and (not self.cart_sets(name)):
+                return None
+            calls.append({target: ident, **({mode: props[mode]['enum'][0]} if mode else {}), **({count: want} if count else {})})
+        return calls
