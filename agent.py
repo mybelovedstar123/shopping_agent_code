@@ -1136,3 +1136,47 @@ class Kyo:
         if meaning:
             self.queued.append(f'(seen on {name}) {meaning}')
         return meaning
+
+    def widen(self) -> None:
+        tool = self.roles.get('compare')
+        schema = self.schemas.get(tool or '') or {}
+        props = schema.get('properties') or {}
+        target = next((k for k, v in props.items() if isinstance(v, dict) and 'array' in _kinds(v)), None)
+        if not tool or not target or any((k != target for k in schema.get('required') or [])) or self.compare_bare():
+            self.widen_singly()
+            return
+        if self.left() <= 12:
+            return
+        cap = props[target].get('maxItems') if isinstance(props[target].get('maxItems'), int) else 4
+        ranked = self.item_groups()
+        share = max(1, cap // max(1, len(ranked)))
+        picks: list[str] = []
+        for ids in ranked:
+            picks += [i for i in ids if i not in self.full][:share]
+        picks = picks[:cap]
+        if len(picks) < 2:
+            return
+        faults: list[str] = []
+        args = _shape({target: picks}, schema, 'args', faults)
+        if faults:
+            return
+        before = len(self.full)
+        reply = self.act(tool, args)
+        if reply is not None:
+            seen = reply.get('observation')
+            self.observe(tool, seen)
+            self.note_view(tool, seen)
+            rows = self.records_in(seen)
+            if rows:
+                self.facts_from[tool] = self.facts_from.get(tool, False) or any((_fact_block(r) for _, r in rows))
+            self.trace.append({'kind': 'widen', 'ids': picks, 'opened': len(self.full) - before})
+            if rows and self.facts_from.get(tool) is False:
+                self.widen_singly()
+                return
+            if len(self.full) == before and len(picks) > 2 and (self.left() > 12):
+                faults = []
+                args = _shape({target: picks[:2]}, schema, 'args', faults)
+                if not faults:
+                    reply = self.act(tool, args)
+                    if reply is not None:
+                        self.observe(tool, reply.get('observation'))
