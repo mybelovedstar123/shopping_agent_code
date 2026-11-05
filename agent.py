@@ -1106,3 +1106,23 @@ class Kyo:
         if texts:
             self.trace.append({'kind': 'fill_facts', 'n': len(texts)})
         return texts
+
+    def cheaper_rows(self) -> list[str]:
+        if self.brief.get('pick') != 'cheapest':
+            return []
+        mark = self.cart_mark() + f'#{self.version}'
+        cat_key = self.category_key()
+        if mark in self.cheaper_marks or not cat_key:
+            return []
+        self.cheaper_marks.add(mark)
+        cart = self.cart_ids()
+        picks: list[str] = []
+        for line in cart:
+            price = self.price_of(line)
+            kind = str((self.rows.get(line) or {}).get(cat_key) or '').strip().lower()
+            if price is None or not kind:
+                continue
+            pool = [i for i in self.seen_order if i not in cart and i not in self.full and self.buyable(i) and (str((self.rows.get(i) or {}).get(cat_key) or '').strip().lower() == kind) and ((self.price_of(i) if self.price_of(i) is not None else float('inf')) < price)]
+            pool.sort(key=lambda i: self.price_of(i) or 0.0)
+            picks += [i for i in pool[:2] if i not in picks]
+        return self.fill_facts(picks[:CHEAPER_OPENS], self.tail() + 4)
