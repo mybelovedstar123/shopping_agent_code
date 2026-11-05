@@ -865,3 +865,17 @@ class Kyo:
             for name, slot in kept[:14]:
                 table.append((label, name, slot['n'], [v[:40] for v in slot['values'][:4]]))
         return table
+
+    def not_stated(self, label: str, name: str, values: list[str]) -> str:
+        number = self.owner_of(label)
+        if not number:
+            return ''
+        for must in self.items[number - 1].musts:
+            prop, _, value = must.partition(':')
+            if re.search('\\b(?:not|no|other than|unlike|at most|at least|under|over|below|above|less|more|between|within|up to|or)\\b', value, re.I):
+                continue
+            words = set(re.findall('[a-z0-9]{3,}', value.lower()))
+            shown = set(re.findall('[a-z0-9]{3,}', ' '.join(values).lower()))
+            if prop.strip() and _words(prop) != name and _stem(prop) & _stem(name) and words and (not words <= shown):
+                return f' [not the stated {prop.strip()}: another property]'
+        return ''
