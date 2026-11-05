@@ -1572,3 +1572,432 @@ class Kyo:
         prompt = HEAR + '\n\nITEMS:\n' + '\n'.join((f'item {n}: {it.name}' for n, it in enumerate(self.items, 1)))
         prompt += '\n\nQUESTIONS AND ANSWERS:\n' + '\n'.join((f'{i}. (about item {n}) Q: {q}\nA: {a}' for i, (n, q, a) in enumerate(sent, 1)))
         return self.ask_json(prompt, list(models), 2500) or {}
+
+    def gate(self, stage: str) -> tuple[bool, str]:
+        steps = [p for p in self.process if p['when'] == stage]
+        if not steps or self.finished or (not self.gate_due(stage)):
+            return (True, '')
+        ending = {self.roles.get('buy'), self.roles.get('refuse')} - {None}
+        tools = [f"- {t['function']['name']}: {t['function'].get('description', '')} | parameters: {_dump(t['function'].get('parameters') or {})}" for t in self.tools if t['function']['name'] not in ending]
+        said: list[str] = []
+        nudged = False
+        for _ in range(GATE_ROUNDS):
+            prompt = GATE.replace('STAGE', 'place the order' if stage == 'order' else 'end without a purchase') + '\n\nREQUEST:\n' + self.request + '\n\nSTEPS DUE NOW:\n' + '\n'.join((f"- {p['step']}" for p in steps)) + '\n\nLEDGER:\n' + self.ledger() + '\n\nCART NOW: ' + self.cart_text() + '\n\nRECORD (messages and step calls so far):\n' + ('\n'.join((f'{i}. {line}' for i, line in enumerate(self.done_log, 1))) or '(nothing yet)') + ('\n\nSTORE NOTES SEEN:\n' + '\n'.join(self.notes[-4:]) if self.notes else '') + f"\n\nMESSAGES LEFT: {max(0, self.msg_limit - self.msg_used)}   STEPS LEFT: {self.left()} (the {('order' if stage == 'order' else 'ending')} itself takes one)" + '\n\nTOOLS:\n' + '\n'.join(tools)
+            got = self.ask_json(prompt, [HEAVY, LIGHT] if nudged else [LIGHT, HEAVY], 3500)
+            if got is None:
+                break
+            told: list[str] = []
+            hold = ''
+            if said:
+                self.take_heard({'needs': got.get('needs')}, told)
+                hold = str(got.get('hold') or '').strip()
+            call = got.get('call') if isinstance(got.get('call'), dict) else None
+            self.trace.append({'kind': 'gate', 'stage': stage, 'call': _clip(call, 200), 'steps': _clip(got.get('steps'), 120), 'hold': hold[:200], 'told': told})
+            if told or hold:
+                self.version += 1
+                return (False, ('Before going on, Kyo did the steps the request asks for:\n' + '\n'.join(said) + '\n' if said else '') + ("The shopper's reply changes the task: " + '; '.join(told + ([hold] if hold else [])) + '. Fix the cart for it, then check out again.'))
+            name = str((call or {}).get('tool') or '')
+            shown = [e for e in _items(got.get('steps')) if isinstance(e, dict)]
+            talk = stage == 'order' and any((p['messages'] > 0 for p in steps))
+            lines = range(1, len(self.done_log) + 1)
+            proof = {i for i in lines if not talk or (i <= len(self.done_steps) and self.done_steps[i - 1] > self.cart_at)}
+            unproven = [e for e in shown if e.get('done') is not True or not any(((_count(n) or 0) in proof for n in _items(e.get('lines'))))]
+            if not call and unproven and (not said) and (not nudged) and self.roles.get('ask') and (self.msg_used < self.msg_limit) and (self.left() >= 2):
+                nudged = True
+                self.trace.append({'kind': 'gate_unproven', 'steps': _clip(unproven, 120)})
+                self.done_log.append(f'(Kyo: no line made since the cart last changed at step {self.cart_at} shows ' + '; '.join((str(e.get('step') or '') for e in unproven))[:200] + f' done, and {self.msg_limit - self.msg_used} message(s) and {self.left()} steps are left: give the call that does it)')
+                self.done_steps.append(-1)
+                continue
+            if not call or name not in self.schemas or name in ending:
+                if not call:
+                    self.gate_ok.add((stage, self.cart_mark() + f'#{self.version}'))
+                break
+            if self.left() < 2 or (name == self.roles.get('ask') and self.msg_used >= self.msg_limit):
+                break
+            faults: list[str] = []
+            args = _shape(call.get('args') if isinstance(call.get('args'), dict) else {}, self.schemas[name], 'args', faults)
+            if faults:
+                break
+            if name == self.roles.get('ask'):
+                text = next((v for v in args.values() if isinstance(v, str)), '')
+                batch = self.send([(1, '', text)], 1)
+                if not batch:
+                    break
+                self.gate_msgs += 1
+                said.append(f'Q: {text}\nA: {batch[0][2]}')
+                continue
+            reply = self.act(name, args)
+            if reply is None:
+                break
+            seen = reply.get('observation')
+            self.absorb(seen)
+            self.done_log.append(f'step {self.step}: {name} {_dump(args)} -> {self.show(seen)[:300]} (cart then: {self.cart_mark()})')
+            self.done_steps.append(self.step)
+            said.append(f'{name} {_dump(args)} -> {self.show(seen)[:400]}')
+        return (True, 'Before going on, Kyo did the steps the request asks for:\n' + '\n'.join(said) if said else '')
+
+    def spoken(self, observation: Any) -> str:
+        if isinstance(observation, str):
+            return observation
+        found: list[str] = []
+
+        def walk(node: Any, depth: int) -> None:
+            if depth > 4:
+                return
+            if isinstance(node, str) and len(node.split()) >= 2:
+                found.append(node)
+            elif isinstance(node, dict):
+                for value in node.values():
+                    walk(value, depth + 1)
+            elif isinstance(node, list):
+                for value in node:
+                    walk(value, depth + 1)
+        walk(observation, 0)
+        return ' '.join(found)[:800] if found else _dump(observation)[:400]
+
+    def loose_lines(self, observation: Any) -> list[str]:
+        lines: list[str] = []
+        if isinstance(observation, dict) and (not self.ident(observation)):
+            for key, value in observation.items():
+                if isinstance(value, str) and len(value.split()) >= 5:
+                    lines.append(value)
+                elif isinstance(value, list) and value and all((isinstance(v, str) for v in value)):
+                    lines.extend((v for v in value if len(v.split()) >= 5))
+                elif isinstance(value, dict) and (not self.ident(value, False, 1)):
+                    for inner in value.values():
+                        if isinstance(inner, str) and len(inner.split()) >= 6:
+                            lines.append(inner)
+        return [line for line in lines if line not in self.heard]
+
+    def take_note(self, lines: list[str]) -> str:
+        self.heard.update(lines)
+        prompt = NOTE + '\n\nITEMS AND REQUIREMENTS NOW:\n' + self.ledger() + '\n\nTHE NOTE:\n' + '\n'.join(lines)
+        got = self.ask_json(prompt, [LIGHT, SPARE], 2500) or {}
+        gone = [str(g) for g in _items(got.get('gone')) if isinstance(g, (str, int))]
+        self.unavailable.update((g for g in gone if g in self.rows))
+        self.note_sold = bool(gone) or got.get('sold_out') is True
+        self.note_named = any((g in self.rows for g in gone))
+        if self.note_sold and len(lines) == 1:
+            self.sold_lines.update(lines)
+        if got.get('kind') not in (None, 'change'):
+            return ''
+        changed = []
+        budget = got.get('budget')
+        if isinstance(budget, (int, float)) and (not isinstance(budget, bool)) and (budget > 0) and (budget != self.budget):
+            self.budget = budget
+            changed.append(f'budget now {budget}')
+        added: set[str] = set()
+        drops = [e for e in _items(got.get('drop')) if isinstance(e, dict) and str(e.get('need') or '').strip()]
+        adds = [e for e in _items(got.get('add')) if isinstance(e, dict) and str(e.get('need') or '').strip()]
+        for entry in drops:
+            item = self.items[min(max(1, _count(entry.get('item')) or 1), len(self.items)) - 1]
+            target = str(entry['need']).strip()
+            live = [m for m in item.musts + item.told if m not in item.dropped]
+            hit = [m for m in live if m == target]
+            if not hit:
+                hit = [m for m in live if _words(m.split(':')[0]) == _words(target.split(':')[0])][:1]
+            item.dropped.extend(hit or [target])
+            changed.append(f'dropped {target}')
+        for entry in adds:
+            item = self.items[min(max(1, _count(entry.get('item')) or 1), len(self.items)) - 1]
+            need = str(entry['need']).strip()
+            if need in item.dropped:
+                item.dropped.remove(need)
+            if need not in item.musts + item.told:
+                item.told.append(need)
+            added.add(need)
+            changed.append(f'added {need}')
+        if gone:
+            changed.append('unavailable: ' + ', '.join(gone))
+        if got.get('price_moved') is True:
+            changed.append('a price changed')
+        summary = str(got.get('summary') or '').strip()
+        if self.brief.get('pick') == 'cheapest' and (drops or gone or self.note_sold or any((c.startswith('budget now') for c in changed))):
+            self.wider_held = False
+            self.cheaper_marks = set()
+        if changed or summary:
+            self.version += 1
+            self.recent = []
+            self.notes.append(summary or '; '.join(changed))
+        return (summary + (' (' + '; '.join(changed) + ')' if changed else '')).strip()
+
+    def needs_now(self) -> list[tuple[int, str]]:
+        out = []
+        for number, item in enumerate(self.items, 1):
+            for need in item.musts + item.told:
+                if need not in item.dropped:
+                    out.append((number, need))
+        return out
+
+    def evidence(self, observation: Any) -> str:
+        ids: list[str] = []
+
+        def walk(node: Any, depth: int) -> None:
+            if depth > 6:
+                return
+            if isinstance(node, dict):
+                ident = self.ident(node, False, depth)
+                if ident and _fact_block(node) and (ident not in ids):
+                    ids.append(ident)
+                    return
+                for value in node.values():
+                    walk(value, depth + 1)
+            elif isinstance(node, list):
+                for value in node:
+                    walk(value, depth + 1)
+        walk(observation, 0)
+        needs = self.needs_now()
+        if not ids or not needs:
+            return ''
+        many = len(self.items) > 1
+        lines = []
+        for ident in ids[:12]:
+            block = _fact_block(self.full.get(ident) or {}) or {}
+            parts = []
+            for number, need in needs[:8]:
+                prop = need.split(':', 1)[0].strip()
+                hits = [f'{k}={str(v)[:50]}' for k, v in block.items() if _names(_stem(prop), _stem(k))]
+                tag = f'(item {number}) ' if many else ''
+                if hits:
+                    parts.append(f'{tag}{prop} -> ' + ', '.join(hits[:3]))
+            if parts:
+                lines.append(f'{ident}: ' + '; '.join(parts))
+        if not lines:
+            return ''
+        return "[evidence: keys whose names contain a requirement's property; one naming a different property (another part or aspect) decides nothing, and a key with another name may still hold the same property] " + ' | '.join(lines)
+
+    def cart_text(self) -> str:
+        if self.cart_view is not None and self.cart_seen_at >= self.cart_at:
+            return _dump(_clip(self.cart_view, 300))[:3000]
+        return "lines by Kyo's record of the cart calls (listing: units): " + _dump(self.cart_lines)
+
+    def held_units(self, ident: str) -> int:
+        if self.cart_view is not None and self.cart_seen_at >= self.cart_at:
+            stack: list[Any] = [self.cart_view]
+            while stack:
+                node = stack.pop()
+                if isinstance(node, dict):
+                    if ident in [v.strip() for v in node.values() if isinstance(v, str)]:
+                        counts = [_count(v) for k, v in node.items() if not isinstance(v, str) and _count(v) is not None and re.search('\\b(?:qty|quantity|count|units?)\\b', _words(k))]
+                        if len(counts) == 1:
+                            return counts[0]
+                    stack += [v for v in node.values() if isinstance(v, (dict, list))]
+                elif isinstance(node, list):
+                    stack += node
+        return self.cart_lines.get(ident, 1)
+
+    def cart_ids(self) -> list[str]:
+        if self.cart_view is not None and self.cart_seen_at >= self.cart_at:
+            text = _dump(self.cart_view)
+            return [i for i in self.rows if i in text]
+        return list(self.cart_lines)
+
+    def record_of(self, ident: str) -> str:
+        record = self.full.get(ident) or self.rows.get(ident)
+        return _dump(_clip(record, 400))[:3000] if record else '(no record seen)'
+
+    def others(self, skip: list[str], limit: int=30) -> str:
+        lines = []
+        order = list(reversed(self.seen_order))
+        if self.brief.get('pick') == 'cheapest':
+            order.sort(key=lambda i: (i not in self.full, self.price_of(i) if self.price_of(i) is not None else float('inf')))
+        for ident in order:
+            if ident in skip or self.sold_out(ident):
+                continue
+            record = self.full.get(ident) or self.rows.get(ident)
+            lines.append(_dump(_clip(record, 160))[:900])
+            if len(lines) >= limit:
+                break
+        return '\n'.join(lines)
+
+    def fit_index(self) -> dict[str, Any]:
+        marks: dict[str, dict[str, Any]] = {}
+        notes: dict[str, set[str]] = {}
+        for ident in self.seen_order:
+            record = self.full.get(ident) or self.rows.get(ident) or {}
+            text = ' '.join((str(v) for v in record.values() if isinstance(v, str)))
+            text += ' ' + '. '.join((f'{k} {v}' for block in record.values() if isinstance(block, dict) for k, v in block.items() if isinstance(v, str)))
+            marks[ident] = _fit_marks(text)
+            for part, codes in marks[ident]['also']:
+                notes.setdefault(part, set()).update(codes)
+        return {'marks': marks, 'notes': notes}
+
+    def fit_set(self, ident: str, index: dict[str, Any]) -> set[str]:
+        mark = index['marks'].get(ident) or {}
+        found = set(mark.get('works') or [])
+        if mark.get('own'):
+            found |= index['notes'].get(mark['own'], set())
+        return found
+
+    def item_ids(self, number: int) -> list[str]:
+        cat_key = self.category_key()
+        item = self.items[number - 1]
+        return [i for i in self.seen_order if cat_key and self.owns(item, str((self.rows.get(i) or {}).get(cat_key) or ''))]
+
+    def fit_faults(self) -> list[str]:
+        if not self.bound:
+            return []
+        index = self.fit_index()
+        cart = self.cart_ids()
+        faults = []
+        for part, main in self.bound:
+            devices = [i for i in cart if i in self.item_ids(main)]
+            parts = [i for i in cart if i in self.item_ids(part)]
+            if len(devices) != 1 or not parts:
+                continue
+            codes = set(index['marks'].get(devices[0], {}).get('codes') or [])
+            if not codes:
+                continue
+            for line in parts:
+                fits = self.fit_set(line, index)
+                if fits and (not fits & codes):
+                    good = [i for i in self.item_ids(part) if self.fit_set(i, index) & codes and (not self.sold_out(i)) and (i not in cart)][:4]
+                    faults.append(f"{line} ({self.items[part - 1].name}) works with {', '.join(sorted(fits)[:4])}, not with {devices[0]} ({', '.join(sorted(codes))})" + (f"; seen parts of that kind that work with it: {', '.join(good)}" if good else '; no seen part of that kind works with it, so look for one or switch the device: ' + self.fit_plan(short=True)))
+        return faults
+
+    def fit_plan(self, short: bool=False) -> str:
+        if not self.bound:
+            return ''
+        index = self.fit_index()
+        lines = []
+        for main in sorted({m for _, m in self.bound}):
+            parts = [p for p, m in self.bound if m == main]
+            tally: dict[str, dict[int, int]] = {}
+            for p in parts:
+                for i in self.item_ids(p):
+                    if self.sold_out(i):
+                        continue
+                    for code in self.fit_set(i, index):
+                        tally.setdefault(code, {}).setdefault(p, 0)
+                        tally[code][p] += 1
+            ranked = sorted(tally.items(), key=lambda kv: (-len(kv[1]), -sum(kv[1].values())))[:4]
+            devices = {code: [i for i in self.item_ids(main) if code in (index['marks'].get(i, {}).get('codes') or [])][:2] for code, _ in ranked}
+            text = '; '.join((f'{code}: ' + ', '.join((f'{n} {self.items[p - 1].name}' for p, n in sorted(per.items()))) + (f" (device seen: {', '.join(devices[code])})" if devices[code] else ' (device not seen yet)') for code, per in ranked))
+            if text:
+                lines.append(f"codes the {self.items[main - 1].name} candidates' parts name -> {text}")
+        if not lines:
+            return ''
+        return ' | '.join(lines) if short else "[fit plan: a device fits a part when the part's text names the device's model code or another name it is sold as; codes are not searchable, so list the device's category and read the codes on its rows] " + ' | '.join(lines)
+
+    def line_faults(self) -> list[str]:
+        cat_key = self.category_key()
+        ids = [i for i in self.cart_ids() if (self.held_units(i) or 0) > 0]
+        if not ids or not cat_key:
+            return []
+        label = {i: str((self.rows.get(i) or {}).get(cat_key) or '') for i in ids}
+        known = {n for n, item in enumerate(self.items, 1) if any((self.owns(item, str(r.get(cat_key) or '')) for r in self.rows.values()))}
+        owner = {i: [n for n, item in enumerate(self.items, 1) if self.owns(item, label[i])] for i in ids}
+        faults: list[str] = []
+        for n, item in enumerate(self.items, 1):
+            if n not in known:
+                continue
+            lines = [i for i in ids if n in owner[i]]
+            if not lines:
+                faults.append(f'item {n} ({item.name}) has no line in the cart')
+            elif len([i for i in lines if owner[i] == [n]]) > 1:
+                faults.append(f"item {n} ({item.name}) has {len(lines)} lines ({', '.join(lines)}); keep one")
+            for i in lines:
+                have = self.held_units(i)
+                if owner[i] == [n] and have != item.qty:
+                    faults.append(f'{i} is held at {have} unit(s); item {n} ({item.name}) wants {item.qty}')
+        if len(known) == len(self.items):
+            for i in ids:
+                if not owner[i]:
+                    faults.append(f"{i} ({label[i] or 'unknown kind'}) is not a kind the shopper asked for: take it out")
+        for i in ids:
+            if self.sold_out(i):
+                faults.append(f'{i} is sold out')
+        prices = {i: self.price_of(i) for i in ids}
+        if isinstance(self.budget, (int, float)) and all((p is not None for p in prices.values())):
+            if self.brief.get('budget_scope') == 'each':
+                over = [i for i in ids if self.budget < prices[i] <= 10 * self.budget]
+                faults += [f'{i} costs {prices[i]:g}, over the {self.budget:g} limit for each item' for i in over]
+            else:
+                total = sum((prices[i] * self.held_units(i) for i in ids))
+                if self.budget + 1e-09 < total <= 10 * self.budget:
+                    faults.append(f'the total is {total:g}, over the budget of {self.budget:g}')
+        return faults
+
+    def count_fixes(self) -> list[tuple[str, int, int]]:
+        cat_key = self.category_key()
+        if not cat_key:
+            return []
+        out = []
+        for ident in self.cart_ids():
+            have = self.held_units(ident) or 0
+            owners = [n for n, item in enumerate(self.items, 1) if self.owns(item, str((self.rows.get(ident) or {}).get(cat_key) or ''))]
+            mine = [i for i in self.cart_ids() if (self.cart_lines.get(i, 1) or 0) > 0 and len(owners) == 1 and self.owns(self.items[owners[0] - 1], str((self.rows.get(i) or {}).get(cat_key) or ''))]
+            if have > 0 and len(owners) == 1 and (len(mine) == 1) and (have != self.items[owners[0] - 1].qty) and (not self.sold_out(ident)):
+                out.append((ident, have, self.items[owners[0] - 1].qty))
+        return out
+
+    def fix_counts(self, wrong: list[tuple[str, int, int]]) -> list[str]:
+        name = self.roles.get('cart') or ''
+        schema = self.schemas.get(name) or {}
+        props = schema.get('properties') or {}
+        texts = [k for k, v in props.items() if isinstance(v, dict) and 'string' in _kinds(v) and ('enum' not in v)]
+        target = next((k for t, k in self.id_args if t == name and k in texts), None) or next((k for k in schema.get('required') or [] if k in texts), None) or (texts[0] if len(texts) == 1 else None)
+        count = next((k for k, v in props.items() if isinstance(v, dict) and 'integer' in _kinds(v)), None)
+        mode = next((k for k, v in props.items() if isinstance(v, dict) and isinstance(v.get('enum'), list) and (len(v['enum']) >= 2)), None)
+        if not name or not target or (not count):
+            return []
+        calls: list[dict[str, Any]] = []
+        for ident, have, want in wrong:
+            if self.cart_sets(name):
+                calls.append({target: ident, count: want})
+            elif mode:
+                options = [str(o) for o in props[mode]['enum']]
+                off = next((o for o in options if re.search('remov|delet|drop|clear|take', o, re.I)), options[1])
+                on = next((o for o in options if o != off), options[0])
+                calls += [{target: ident, mode: off, count: have}, {target: ident, mode: on, count: want}]
+            else:
+                return []
+        if len(calls) + 3 > self.left():
+            return []
+        done = []
+        for args in calls:
+            faults: list[str] = []
+            args = _shape(args, schema, 'args', faults)
+            if faults:
+                break
+            reply = self.act(name, args)
+            if reply is None or self.finished:
+                break
+            self.note_cart(name, args)
+            self.cart_said = _dump(reply.get('observation'))
+            self.observe(name, reply.get('observation'))
+            done.append(_dump(args) + ' -> ' + self.show(reply.get('observation'))[:300])
+        self.trace.append({'kind': 'count_fix', 'calls': done})
+        return done
+
+    def check_key(self, ids: list[str]) -> str:
+        return '|'.join(sorted(ids)) + f'#{self.version}'
+
+    def check_cart(self, ids: list[str] | None=None, limit: float=SPEND_SOFT) -> str:
+        lead = ids is not None
+        ids = ids if lead else self.cart_ids()
+        key = self.check_key(ids)
+        if key in self.checked or not self.judges(limit) or (not ids):
+            return ''
+        self.checked.add(key)
+        prompt = CHECK + '\n\nREQUEST:\n' + self.request + '\n\nREQUIREMENTS IN FORCE:\n' + self.ledger()
+        if lead:
+            quantity = '; '.join((f'item {n}: quantity {it.qty}' for n, it in enumerate(self.items, 1)))
+            prompt += '\n\nCART (planned, judge these listings as if they were carted at the requested quantities: ' + quantity + '):\n' + ', '.join(ids)
+        else:
+            prompt += '\n\nCART:\n' + self.cart_text()
+        prompt += "\n\nRECORDS OF THE CART'S LISTINGS:\n" + '\n'.join((f'{i}: ' + ('SOLD OUT (the store says it can no longer be bought). ' if self.sold_out(i) else '') + self.record_of(i) for i in ids))
+        if self.brief.get('pick') in ('cheapest', 'most', 'least'):
+            prompt += '\n\nOTHER LISTINGS SEEN (newest first):\n' + self.others(ids, 15)
+        got = self.ask_json(prompt, self.judges(limit), 3000)
+        self.trace.append({'kind': 'check', 'cart': ids, 'got': got})
+        self.verdicts[key] = bool(got) and got.get('ok') is not False
+        if not got or got.get('ok') is not False:
+            return ''
+        self.leads = [i for i in self.leads if i not in ids]
+        problems = [str(p) for p in _items(got.get('problems'))][:5]
+        better = [str(b) for b in _items(got.get('better')) if str(b) in self.rows and (not self.sold_out(str(b)))][:4]
+        text = 'A careful review says this cart is not right yet: ' + '; '.join(problems or ['see the requirements'])
+        if better:
+            text += '. Listings that look better: ' + ', '.join(better)
+        return text + '. Fix the cart (or show the review is wrong by re-reading the records), then check out.'
