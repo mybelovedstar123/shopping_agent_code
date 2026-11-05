@@ -959,3 +959,32 @@ class Kyo:
         version, have = self.view_keys.get(ident, (-1, set()))
         keys = self.tool_keys.get(name)
         return bool(keys) and version == self.version and (keys <= have) and (ident not in self.gone)
+
+    def read_shape(self, name: str, observation: Any) -> dict[str, Any] | None:
+        if name in self.shapes:
+            return self.shapes[name]
+        if not isinstance(observation, dict):
+            return None
+        lists = [k for k, v in observation.items() if isinstance(v, list) and len(v) >= 2 and all((isinstance(r, dict) for r in v))]
+        if not lists:
+            return None
+        self.shapes[name] = None
+        sample = {k: v[:3] if k in lists else v for k, v in observation.items()}
+        prompt = SHAPE + '\n\nTOOL: ' + name + ' | parameters: ' + _dump(self.schemas.get(name) or {}) + '\n\nRESULT (first rows only):\n' + _dump(_clip(sample, 120))[:4000]
+        got = self.ask_json(prompt, [LIGHT, HEAVY], 2500) or {}
+        rows = got.get('rows') if got.get('rows') in lists else None
+        if not rows:
+            return None
+        first = observation[rows][0]
+        props = (self.schemas.get(name) or {}).get('properties') or {}
+
+        def named(key: Any, where: dict[str, Any]) -> str | None:
+            return key if isinstance(key, str) and key in where else None
+        shape = {'rows': rows, 'count': named(got.get('count'), observation), 'next': named(got.get('next'), observation), 'next_arg': named(got.get('next_arg'), props), 'price': named(got.get('price'), first), 'stock': named(got.get('stock'), first)}
+        if shape['count'] and (isinstance(observation[shape['count']], bool) or not isinstance(observation[shape['count']], int)):
+            shape['count'] = None
+        self.shapes[name] = shape
+        self.price_key = self.price_key or shape['price']
+        self.stock_key = self.stock_key or shape['stock']
+        self.trace.append({'kind': 'shape', 'tool': name, 'shape': shape})
+        return shape
