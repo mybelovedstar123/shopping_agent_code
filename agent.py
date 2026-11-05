@@ -1541,3 +1541,34 @@ class Kyo:
             if isinstance(answer, dict) and answer.get('error'):
                 break
         return sent
+
+    def take_heard(self, heard: dict[str, Any], told: list[str]) -> None:
+        many = len(self.items) > 1
+        for entry in _items(heard.get('needs')):
+            if not isinstance(entry, dict) or not str(entry.get('need') or '').strip():
+                continue
+            number = min(max(1, _count(entry.get('item')) or 1), len(self.items))
+            need = str(entry['need']).strip()
+            if need not in self.items[number - 1].told:
+                self.items[number - 1].told.append(need)
+                told.append(f'item {number}: {need}' if many else need)
+            if entry.get('points') is True and (number, need) not in self.refs:
+                self.refs.append((number, need))
+        for entry in _items(heard.get('drop')):
+            if isinstance(entry, dict) and str(entry.get('property') or '').strip():
+                item = self.items[min(max(1, _count(entry.get('item')) or 1), len(self.items)) - 1]
+                gone = _words(str(entry['property']).split(':')[0])
+                hit = [m for m in item.musts + item.told if m not in item.dropped and _words(m.split(':')[0]) == gone]
+                item.dropped.extend(hit)
+                told.extend((f'dropped {m}' for m in hit))
+        for entry in _items(heard.get('free')):
+            if isinstance(entry, dict) and entry.get('property'):
+                number = min(max(1, _count(entry.get('item')) or 1), len(self.items))
+                self.items[number - 1].free.append(str(entry['property']))
+        if isinstance(heard.get('budget'), (int, float)) and (not isinstance(heard.get('budget'), bool)) and (heard['budget'] > 0):
+            self.budget = heard['budget']
+
+    def hear(self, sent: list[tuple[int, str, str]], models: tuple[str, ...]=(HEAVY, LIGHT)) -> dict[str, Any]:
+        prompt = HEAR + '\n\nITEMS:\n' + '\n'.join((f'item {n}: {it.name}' for n, it in enumerate(self.items, 1)))
+        prompt += '\n\nQUESTIONS AND ANSWERS:\n' + '\n'.join((f'{i}. (about item {n}) Q: {q}\nA: {a}' for i, (n, q, a) in enumerate(sent, 1)))
+        return self.ask_json(prompt, list(models), 2500) or {}
