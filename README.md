@@ -20,7 +20,8 @@ to make the final decision reliable under those conditions.
 
 This repository is evolving from the single agent described below into a team of
 independent agents inside a complete, self-contained shopping application. See the
-[roadmap](docs/ROADMAP.md) for the plan and schedule. Until the agent team lands, this
+[roadmap](docs/ROADMAP.md) for the plan and schedule, and the
+[architecture](docs/ARCHITECTURE.md) for the design. Until the agent team lands, this
 README describes `agent.py`, the existing single agent.
 
 ## At a glance
