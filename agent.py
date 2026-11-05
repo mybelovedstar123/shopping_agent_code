@@ -2175,3 +2175,24 @@ class Kyo:
         if lines:
             self.version += 1
         return '\n'.join(lines)
+
+    def sold_out(self, ident: str) -> bool:
+        return ident in self.unavailable or ident in self.gone
+
+    def swap_hint(self) -> str:
+        lost = [i for i in self.cart_ids() if i not in self.gone and self.sold_out(i)]
+        if not lost:
+            return ''
+        for ident in lost:
+            self.gone[ident] = self.step
+        self.leads = [i for i in self.leads if i not in lost]
+        self.version += 1
+        picks = self.replacements(lost)
+        text = f"[Kyo] Sold out now: {', '.join(lost)} (the store shows it cannot be bought). It will not come back, so do not open it again."
+        if picks and self.left() <= 6:
+            return text + f" Few steps are left: in this turn add {picks[0]} at the requested quantity and remove the sold-out line (two calls), then check out. Other listings already read that appear to fit: {', '.join(picks[1:]) or 'none'}."
+        if picks and self.brief.get('pick') == 'cheapest':
+            return text + f" Listings already read that appear to fit that item instead, cheapest first: {', '.join(picks)}. The pick rule is the cheapest, so unless you have already seen the whole fitting set, run one search under {picks[0]}'s price (the search's maximum price, if it has one) before you swap the sold-out line for the cheapest fitting listing."
+        if picks:
+            return text + f" Listings already read that appear to fit that item instead: {', '.join(picks)}. In this turn take the sold-out line out of the cart and add {picks[0]} at the requested quantity, then check out."
+        return text + ' Remove that line from the cart and add the best other listing that fits; search for one if none you have read fits.'
