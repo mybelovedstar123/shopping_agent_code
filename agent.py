@@ -602,3 +602,9 @@ class Kyo:
         if self.roles.get('ask'):
             talk = [p['messages'] for p in self.process if p['when'] in ('order', 'end') and p['messages']]
             self.reserve = min(max(talk), self.msg_limit) if talk else 0
+
+    @staticmethod
+    def shared_shelf(brief: dict[str, Any]) -> bool:
+        shelves = [_words(str(e.get('shelf') or '')) for e in _items(brief.get('items')) if isinstance(e, dict)]
+        shelves = [s for s in shelves if s]
+        return len(shelves) != len(set(shelves))
