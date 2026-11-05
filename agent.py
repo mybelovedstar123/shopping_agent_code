@@ -1203,3 +1203,372 @@ class Kyo:
         cap = max(5, 2 * len(lanes) + 2)
         read = self.fill_facts(first[:cap][:8], 22)
         self.fill_facts((first[cap:] + more)[:max(0, 10 - len(read))], 30)
+
+    def ready_to_ask(self) -> bool:
+        if self.asked or not self.roles.get('ask') or self.msgs_free() <= 0:
+            return False
+        if self.left() <= 8:
+            return False
+        opened = len(self.full)
+        if opened >= 3 * len(self.items) + 1:
+            return True
+        return self.step >= max(8, self.max_steps // 4)
+
+    def message_args(self, text: str) -> dict[str, Any] | None:
+        name = self.roles.get('ask')
+        schema = self.schemas.get(name or '') or {}
+        props = schema.get('properties') or {}
+        texts = [k for k, v in props.items() if isinstance(v, dict) and 'string' in _kinds(v) and ('enum' not in v)]
+        target = next((k for k in schema.get('required') or [] if k in texts), None) or (texts[0] if texts else None)
+        if not target:
+            return None
+        args: dict[str, Any] = {target: text}
+        for key in schema.get('required') or []:
+            if key not in args:
+                spec = props.get(key) or {}
+                if isinstance(spec.get('enum'), list) and spec['enum']:
+                    args[key] = spec['enum'][0]
+                else:
+                    return None
+        faults: list[str] = []
+        args = _shape(args, schema, 'args', faults)
+        return None if faults else args
+
+    def interview(self) -> str:
+        self.asked = True
+        if self.msgs_free() <= 0:
+            return ''
+        self.widen()
+        lanes = self.plan_lanes(self.msgs_free())
+        found = {n: 0 for n in lanes}
+        spent = {n: 0 for n in lanes}
+        used: dict[int, set[str]] = {n: set() for n in lanes}
+        follow: list[tuple[int, list[str], bool]] = []
+        sent: list[tuple[int, str, str]] = []
+        told: list[str] = []
+        while self.msgs_free() > 0 and (not self.finished) and (self.left() > 6):
+            if follow:
+                number, labels, shown = follow.pop(0)
+            else:
+                number, labels = self.next_ask(lanes, found, spent, used)
+                shown = False
+                if not labels:
+                    break
+            used[number].update((_words(label) for label in labels))
+            batch = self.send([(number, labels[0], self.ask_text(number, labels, shown))])
+            if not batch:
+                break
+            sent += batch
+            spent[number] += 1
+            had = [len(item.told) for item in self.items]
+            heard = self.hear(batch, (LIGHT, HEAVY))
+            self.take_heard(heard, told)
+            fresh = [n for n, item in enumerate(self.items, 1) if len(item.told) > had[n - 1]]
+            for n in fresh:
+                found[n] = found.get(n, 0) + 1
+            if fresh or 1 not in [_count(x) for x in _items(heard.get('crowded'))]:
+                continue
+            head = labels[0].split()[-1]
+            if len(labels[0].split()) >= 2 and _words(head) not in used[number]:
+                follow.insert(0, (number, [head], False))
+            elif not shown and len(self.samples(number, labels[0])) >= 2:
+                follow.insert(0, (number, labels, True))
+        found_items = [n for n in found if found[n] > 0]
+        searched = self.value_search(found_items) if found_items else ''
+        if told:
+            self.version += 1
+        lines = [f'Q: {q}\nA: {a}' for _, q, a in sent]
+        summary = "Kyo's interviewer asked the shopper (each question used one step):\n" + '\n'.join(lines)
+        summary += '\nNew firm requirements from these answers: ' + ('; '.join(told) if told else 'none')
+        summary += '. Apply them to every pick (search again with the new values where needed).'
+        pointed = [need for _, need in self.refs if any((need in t for t in told))]
+        if pointed:
+            summary += ' These take their value from another listing: ' + ' | '.join(pointed) + '. Find that listing, open its page in full, and open every listing its page refers to; the last page gives the value, and the order counts only after all of them are opened.'
+        if searched:
+            summary += '\n' + searched
+        if self.queued:
+            summary += '\n[notes seen meanwhile] ' + ' | '.join(self.queued)
+            self.queued = []
+        return summary
+
+    def search_template(self) -> tuple[str, dict[str, Any], str] | None:
+        tool = self.roles.get('search')
+        schema = self.schemas.get(tool or '') or {}
+        props = schema.get('properties') or {}
+        texts = [k for k, v in props.items() if isinstance(v, dict) and 'string' in _kinds(v) and ('enum' not in v)]
+        named = [k for k in texts if re.search('(?:^|_)(?:q|query|search|text|phrase|keywords?|terms?|words?)(?:_|$)|query|phrase|keyword', k, re.I)]
+        for args in reversed(self.searched):
+            fields = [k for k in named or texts if isinstance(args.get(k), str) and re.search('[a-z]', args[k], re.I)]
+            if not named:
+                labels = {str(r.get(self.category_key()) or '').strip().lower() for r in self.rows.values()} - {''} if self.category_key() else set()
+                fields = [k for k in fields if len({str(a.get(k)) for a in self.searched if a.get(k)}) >= 2 and any((len(str(a.get(k)).split()) >= 2 for a in self.searched)) and (not any((str(a.get(k) or '').strip().lower() in labels for a in self.searched)))]
+            if fields and tool:
+                field = fields[0]
+                keep = {k: v for k, v in args.items() if k != field and (isinstance((props.get(k) or {}).get('enum'), list) or k in (schema.get('required') or []))}
+                cat_key = self.category_key()
+                shelves = {_words(item.shelf or '') for item in self.items} | {_words(item.name) for item in self.items}
+                shelves |= {_words(str(row.get(cat_key) or '')) for row in self.rows.values()} if cat_key else set()
+                keep = {k: v for k, v in keep.items() if k in (schema.get('required') or []) or not isinstance(v, str) or (_words(v) not in shelves and (not any(({w for w in _stem(v) if len(w) >= 4} & {w for w in _stem(s) if len(w) >= 4} for s in shelves if s))))}
+                worded = [a for a in self.searched if isinstance(a.get(field), str) and re.search('[a-z]', a[field], re.I)]
+                for k in list(keep):
+                    if isinstance((props.get(k) or {}).get('enum'), list):
+                        used = [_dump(a[k]) for a in worded if k in a]
+                        if used:
+                            best = max(used, key=used.count)
+                            keep[k] = next((a[k] for a in worded if k in a and _dump(a[k]) == best))
+                return (tool, keep, field)
+        return None
+
+    def value_words(self, number: int) -> list[str]:
+        out = []
+        for n, need in self.needs_now():
+            if n != number or need in [m for _, m in self.refs] or ':' not in need:
+                continue
+            value = need.split(':', 1)[1].strip()
+            if not value or re.search('\\b(?:not|no|other than|unlike|alongside|listing|page|shown|at most|at least|under|over|below|above|less|more|between|within|up to|or)\\b', value, re.I):
+                continue
+            out.append(value)
+        return out
+
+    def value_search(self, numbers: list[int]) -> str:
+        plan = self.search_template()
+        if not plan or self.left() < 22:
+            return ''
+        tool, base, field = plan
+        seen: list[str] = []
+        budget = 8
+        for number in numbers:
+            values = self.value_words(number)
+            item = self.items[number - 1]
+            fresh = [v for v in values if any((':' in t and t.split(':', 1)[1].strip() == v for t in item.told))]
+            if not fresh or budget <= 2:
+                continue
+            stated = [i for i, v in enumerate(values) if v not in fresh]
+            drop = stated[-1] if stated else 0
+            tries = [values, values[:drop] + values[drop + 1:]] if len(values) > 1 else [values]
+            for words in tries[:2]:
+                if not words:
+                    continue
+                faults: list[str] = []
+                args = _shape({**base, field: ' '.join(words)}, self.schemas.get(tool), 'args', faults)
+                if faults or self.finished:
+                    break
+                reply = self.act(tool, args)
+                budget -= 1
+                if reply is None:
+                    break
+                observation = reply.get('observation')
+                self.observe(tool, observation)
+                cat_key = self.category_key()
+                found = [i for i, _ in self.records_in(observation)]
+                cap = self.budget if isinstance(self.budget, (int, float)) else None
+                prices = [self.price_of(i) for i in found]
+                if cap is not None and prices and all((p is not None and p > 10 * cap for p in prices)):
+                    cap = None
+                rows = [i for i in found if self.buyable(i) and (not cat_key or self.owns(item, str((self.rows.get(i) or {}).get(cat_key) or ''))) and (cap is None or (self.price_of(i) or 0) <= cap)]
+                seen.append(f'{_dump(args.get(field))}: ' + (', '.join(rows[:6]) or 'no row of that kind'))
+                if rows:
+                    opened = self.fill_facts([i for i in rows if i not in self.full][:min(3, budget)], self.tail() + 16)
+                    budget -= len(opened)
+                    if opened:
+                        seen.append('opened: ' + ' | '.join(opened)[:2400])
+                    break
+        if not seen:
+            return ''
+        self.trace.append({'kind': 'value_search', 'seen': [s[:200] for s in seen]})
+        return "[Kyo searched each such item's requirement values together and read the first fitting-kind rows] " + '\n'.join(seen)
+
+    def next_ask(self, lanes: dict[int, list[str]], found: dict[int, int], spent: dict[int, int], used: dict[int, set[str]]) -> tuple[int, list[str]]:
+        first = {n: i for i, n in enumerate(self.plan_order)}
+        for number in sorted(lanes, key=lambda n: (found.get(n, 0) > 0, spent.get(n, 0), first.get(n, len(first) + n))):
+            left = [label for label in lanes[number] if _words(label) not in used[number]]
+            if left:
+                return (number, left[:1])
+        return (0, [])
+
+    def ask_text(self, number: int, labels: list[str], shown: bool=False) -> str:
+        if len(labels) >= 2:
+            return f'What {labels[0]} or {labels[1]} would you like for the {self.items[number - 1].name}?'
+        return self.question(number, labels[0], self.samples(number, labels[0]) if shown else None)
+
+    def lane_keys(self, number: int, table: list[tuple[str, str, int, list[str]]]) -> list[str]:
+        item = self.items[number - 1]
+        settled = [_stem(m.split(':', 1)[0]) for m in item.musts]
+        rows = [(label, key, carried, len(values)) for label, key, carried, values in table if self.owner_of(label) == number]
+        measured = {key: sum((1 for v in values if re.match('^\\s*[\\d.,/x -]+\\s*[a-z]{0,6}\\s*$', v))) * 2 > len(values) for _, key, _, values in table}
+        if len(self.items) == 1 and (not rows):
+            rows = [(label, key, carried, len(values)) for label, key, carried, values in table]
+        rows.sort(key=lambda r: (-r[2], measured.get(r[1], False), -r[3]))
+        keys = [key for _, key, _, _ in rows if not any((_names(prop, _stem(key)) for prop in settled)) and (not re.search(NOT_PROPERTY, key))]
+        return [key for key in keys if not re.search(CATCH_ALL, key)] + [key for key in keys if re.search(CATCH_ALL, key)]
+
+    def owner_of(self, label: str) -> int:
+        if not label:
+            return 0
+        words = _words(label)
+        long = _roots(label)
+        best, top = (0, 0.0)
+        for number, item in enumerate(self.items, 1):
+            if words == _words(item.shelf or ''):
+                score = 3.0
+            elif words == _words(item.name):
+                score = 2.0
+            else:
+                mine = _roots(item.shelf or '') | _roots(item.name)
+                score = len(long & mine) / max(1, len(long | mine))
+            if score > top:
+                best, top = (number, score)
+        return best
+
+    def owns(self, item: Item, label: str) -> bool:
+        return bool(label) and item in self.items and (self.owner_of(label) == self.items.index(item) + 1)
+
+    def records_of_item(self, number: int) -> int:
+        cat_key = self.category_key()
+        item = self.items[number - 1]
+        return sum((1 for record in self.full.values() if cat_key and self.owns(item, str(record.get(cat_key) or '')) and _fact_block(record)))
+
+    def plan_lanes(self, count: int) -> dict[int, list[str]]:
+        table = self.key_table()
+        settled = []
+        for number, item in enumerate(self.items, 1):
+            settled.append(f'item {number}: {item.name} - settled by the request: ' + ('; '.join(item.musts) or 'nothing'))
+        listing = []
+        last = None
+        for index, (label, name, carried, values) in enumerate(table, 1):
+            if label != last:
+                listing.append(f'category {label!r}:')
+                last = label
+            listing.append(f'  {index}. {name} (on {carried}): ' + ' | '.join(values) + self.not_stated(label, name, values) + (' [several features in one: ask last]' if re.search(CATCH_ALL, name) else ''))
+        prompt = PLAN.replace('COUNT', str(max(1, count))) + '\n\nREQUEST:\n' + self.request + '\n\nITEMS:\n' + '\n'.join(settled)
+        first = [str(x) for x in _items(self.brief.get('ask_first')) if str(x).strip()]
+        if first:
+            prompt += '\n\nASK FIRST (the request asks to be asked about these):\n' + '\n'.join(first)
+        prompt += '\n\nATTRIBUTE KEYS SEEN:\n' + ('\n'.join(listing) or '(no full listing records yet)')
+        plan = self.ask_json(prompt, [HEAVY, LIGHT], 3500) or {}
+        lanes: dict[int, list[str]] = {n: [] for n in range(1, len(self.items) + 1)}
+        hinted: dict[int, set[str]] = {n: set() for n in lanes}
+        for pick in _items(plan.get('ask')):
+            if not isinstance(pick, dict):
+                continue
+            number = min(max(1, _count(pick.get('item') or 1) or 1), len(self.items))
+            label = re.split('\\s+(?:and|or)\\s+|[/,;(]', str(pick.get('label') or ''))[0].strip().rstrip('?.')
+            if not label or len(label.split()) > 5:
+                continue
+            if all((_words(label) != _words(other) for other in lanes[number])):
+                lanes[number].append(label)
+            if str(pick.get('hint') or '').strip():
+                hinted[number].add(_words(label))
+                if number not in self.plan_order:
+                    self.plan_order.append(number)
+        for number in lanes:
+            keys = self.lane_keys(number, table)
+            read = max(1, self.records_of_item(number))
+            own: dict[str, float] = {}
+            for label, key, carried, _ in table:
+                if self.owner_of(label) == number:
+                    own[key] = max(own.get(key, 0.0), carried / read)
+
+            def spelled(label: str) -> str:
+                plain = lambda text: re.sub('our\\b', 'or', re.sub('(?<=[a-z]{3})s\\b', '', _words(text)))
+                return next((k for k in own if plain(k) == plain(label)), label)
+
+            def share_of(label: str) -> float:
+                if _words(label) in own:
+                    return own[_words(label)]
+                near = [s for k, s in own.items() if _names(_stem(label), _stem(k)) or _names(_stem(k), _stem(label))]
+                return max(near) if near else 0.0
+            hinted[number] = {_words(spelled(h)) for h in hinted[number]}
+            lane = []
+            for pick in lanes[number]:
+                if all((_words(spelled(pick)) != _words(other) for other in lane)):
+                    lane.append(spelled(pick))
+            for key in [k for k in keys if own.get(k, 0.0) >= GUARD_SHARE and (not re.search(CATCH_ALL, k))][:GUARD_KEYS]:
+                if any((_words(key) == _words(other) for other in lane[:3])):
+                    continue
+                weak = next((i for i, other in enumerate(lane[:3]) if _words(other) not in hinted[number] and share_of(other) + GUARD_GAP <= own.get(key, 0.0)), None)
+                if weak is None and len(lane) >= 3:
+                    continue
+                placed = [other for other in lane if _words(other) != _words(key)]
+                if weak is not None and len(self.items) > 1:
+                    moved = placed[weak]
+                    placed[weak] = key
+                    placed.insert(min(3, len(placed)), moved)
+                else:
+                    placed.insert(min(len(placed), weak if weak is not None else len(placed)), key)
+                if any((_words(x) in hinted[number] and all((_words(x) != _words(y) for y in placed[:3])) for x in lane[:3])):
+                    continue
+                lane = placed
+            lanes[number] = lane
+            for key in keys:
+                if all((_words(key) != _words(other) for other in lanes[number])):
+                    lanes[number].append(key)
+            lanes[number] = [x for x in lanes[number] if not re.search(CATCH_ALL, _words(x))] + [x for x in lanes[number] if re.search(CATCH_ALL, _words(x))]
+        self.trace.append({'kind': 'plan', 'ask': _clip(plan.get('ask'), 120), 'lanes': {n: v[:8] for n, v in lanes.items()}})
+        return lanes
+
+    def question(self, number: int, label: str, samples: list[str] | None=None) -> str:
+        text = f'What {label} would you like for the {self.items[number - 1].name}'
+        return text + (f', for example {samples[0]} or {samples[1]}?' if samples else '?')
+
+    def samples(self, number: int, label: str) -> list[str]:
+        want = _words(label)
+        settled = ' '.join(self.items[number - 1].musts).lower()
+        for _, name, _, values in self.key_table():
+            if name == want:
+                return [v for v in values if v and v not in settled and (len(v) <= 30)][:2]
+        return []
+
+    def send(self, questions: list[tuple[int, str, str]], floor: int=6) -> list[tuple[int, str, str]]:
+        tool = self.roles['ask']
+        sent: list[tuple[int, str, str]] = []
+        for number, _, text in questions:
+            if self.finished or self.left() <= floor or self.msg_used >= self.msg_limit:
+                break
+            args = self.message_args(text)
+            if not args:
+                break
+            reply = self.act(tool, args)
+            if reply is None:
+                break
+            self.msg_used += 1
+            answer = reply.get('observation')
+            words = self.spoken(answer)
+            sent.append((number, text, words))
+            self.done_log.append(f'step {self.step}: message to the shopper {text!r} -> reply {words[:300]!r} (cart then: {self.cart_mark()})')
+            self.done_steps.append(self.step)
+            self.trace.append({'kind': 'ask', 'q': text, 'a': words[:300]})
+            if isinstance(answer, dict) and answer.get('error'):
+                break
+        return sent
+
+    def take_heard(self, heard: dict[str, Any], told: list[str]) -> None:
+        many = len(self.items) > 1
+        for entry in _items(heard.get('needs')):
+            if not isinstance(entry, dict) or not str(entry.get('need') or '').strip():
+                continue
+            number = min(max(1, _count(entry.get('item')) or 1), len(self.items))
+            need = str(entry['need']).strip()
+            if need not in self.items[number - 1].told:
+                self.items[number - 1].told.append(need)
+                told.append(f'item {number}: {need}' if many else need)
+            if entry.get('points') is True and (number, need) not in self.refs:
+                self.refs.append((number, need))
+        for entry in _items(heard.get('drop')):
+            if isinstance(entry, dict) and str(entry.get('property') or '').strip():
+                item = self.items[min(max(1, _count(entry.get('item')) or 1), len(self.items)) - 1]
+                gone = _words(str(entry['property']).split(':')[0])
+                hit = [m for m in item.musts + item.told if m not in item.dropped and _words(m.split(':')[0]) == gone]
+                item.dropped.extend(hit)
+                told.extend((f'dropped {m}' for m in hit))
+        for entry in _items(heard.get('free')):
+            if isinstance(entry, dict) and entry.get('property'):
+                number = min(max(1, _count(entry.get('item')) or 1), len(self.items))
+                self.items[number - 1].free.append(str(entry['property']))
+        if isinstance(heard.get('budget'), (int, float)) and (not isinstance(heard.get('budget'), bool)) and (heard['budget'] > 0):
+            self.budget = heard['budget']
+
+    def hear(self, sent: list[tuple[int, str, str]], models: tuple[str, ...]=(HEAVY, LIGHT)) -> dict[str, Any]:
+        prompt = HEAR + '\n\nITEMS:\n' + '\n'.join((f'item {n}: {it.name}' for n, it in enumerate(self.items, 1)))
+        prompt += '\n\nQUESTIONS AND ANSWERS:\n' + '\n'.join((f'{i}. (about item {n}) Q: {q}\nA: {a}' for i, (n, q, a) in enumerate(sent, 1)))
+        return self.ask_json(prompt, list(models), 2500) or {}
