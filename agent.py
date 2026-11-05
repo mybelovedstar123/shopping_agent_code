@@ -519,3 +519,86 @@ class Kyo:
                     self.broke = True
                 return None
         return None
+
+    def read_request(self) -> None:
+        lines = []
+        for tool in self.tools:
+            fn = tool['function']
+            lines.append(f"- {fn['name']}: {fn.get('description', '')} | parameters: {_dump(fn.get('parameters') or {})}")
+        prompt = BRIEF + '\nTOOLS:\n' + '\n'.join(lines) + '\n\nREQUEST:\n' + self.request
+        if self.view.get('opening') is not None:
+            prompt += '\n\nOPENING NOTE FROM THE STORE:\n' + _dump(_clip(self.view.get('opening'), 1500))
+        brief = self.ask_json(prompt, [LIGHT], 4000) or {}
+        if not self.no_credit and (not _items(brief.get('items')) or not isinstance(brief.get('roles'), dict) or (not brief['roles'].get('buy'))):
+            brief = self.ask_json(prompt, [HEAVY, LIGHT], 2500) or brief
+        elif not self.no_credit and self.shared_shelf(brief):
+            again = self.ask_json(prompt, [HEAVY], 2500) or {}
+            if _items(again.get('items')) and isinstance(again.get('roles'), dict) and again['roles'].get('buy'):
+                brief = again
+        self.brief = brief
+        roles = brief.get('roles') if isinstance(brief.get('roles'), dict) else {}
+        self.roles = {k: v for k, v in roles.items() if isinstance(v, str) and v in self.schemas}
+        for key in ('buy_args', 'refuse_args'):
+            if not isinstance(brief.get(key), dict):
+                brief[key] = {}
+        buy, refuse = (self.roles.get('buy'), self.roles.get('refuse'))
+        if buy and buy == refuse and (not brief['buy_args'] or not brief['refuse_args'] or brief['buy_args'] == brief['refuse_args']):
+            ask = f'The store tool {buy} both checks out and ends without a purchase, depending on its arguments. Its schema: ' + _dump(self.schemas.get(buy)) + '\nReturn ONE JSON object and nothing else: {"buy_args": the fixed arguments that check out, "refuse_args": the fixed arguments that end without a purchase} (only the arguments that choose the mode).'
+            fixed = self.ask_json(ask, [LIGHT, HEAVY], 1500) or {}
+            if isinstance(fixed.get('buy_args'), dict) and isinstance(fixed.get('refuse_args'), dict) and (fixed['buy_args'] != fixed['refuse_args']):
+                brief['buy_args'], brief['refuse_args'] = (fixed['buy_args'], fixed['refuse_args'])
+        for entry in _items(brief.get('items')):
+            if not isinstance(entry, dict):
+                continue
+            quantity = _count(entry.get('quantity'))
+            count = quantity if quantity and quantity > 0 else 1
+            musts = [str(m) for m in _items(entry.get('musts')) if m]
+            self.items.append(Item(str(entry.get('name') or 'the product'), str(entry.get('shelf') or ''), count, musts))
+        merged: list[Item] = []
+        became: dict[int, int] = {}
+        for old, item in enumerate(self.items, 1):
+            twin = next((m for m in merged if item.shelf.strip() and _words(m.shelf) == _words(item.shelf) and (not any((_words(a.split(':')[0]) == _words(b.split(':')[0]) and _words(a.partition(':')[2]) != _words(b.partition(':')[2]) for a in m.musts for b in item.musts)))), None)
+            if twin is None:
+                merged.append(item)
+                became[old] = len(merged)
+            else:
+                became[old] = merged.index(twin) + 1
+                twin.musts += [m for m in item.musts if m not in twin.musts]
+                self.trace.append({'kind': 'items_merged', 'into': twin.name, 'dropped': item.name})
+        self.items = merged
+        if not self.items:
+            self.items = [Item('the requested product', '', 1, [])]
+        for pair in _items(brief.get('fits')):
+            if isinstance(pair, dict):
+                part, main = (became.get(_count(pair.get('item')) or 0), became.get(_count(pair.get('with')) or 0))
+                if part and main and (part != main) and (1 <= part <= len(self.items)) and (1 <= main <= len(self.items)) and ((part, main) not in self.bound):
+                    self.bound.append((part, main))
+        for lookup in _items(brief.get('lookups')):
+            text = str(lookup).strip()
+            if not any((text in item.musts for item in self.items)):
+                key = _words(text.split(':')[0])
+                text = next((m for item in self.items for m in item.musts if _words(m.split(':')[0]) == key), text)
+            number = next((n for n, item in enumerate(self.items, 1) if text in item.musts), 1)
+            if text and (number, text) not in self.refs:
+                self.refs.append((number, text))
+        self.unmix()
+        budget = brief.get('budget')
+        if isinstance(budget, str) and re.fullmatch('\\s*\\d+(\\.\\d+)?\\s*', budget):
+            budget = float(budget)
+        if isinstance(budget, (int, float)) and (not isinstance(budget, bool)) and (budget > 0):
+            self.budget = budget
+        limit = _count(brief.get('messages'))
+        if limit is not None and limit >= 0:
+            self.msg_limit = limit
+        elif self.roles.get('ask'):
+            self.msg_limit = 3
+        steps = _count(brief.get('steps'))
+        if steps is not None and 10 <= steps < self.max_steps:
+            self.max_steps = steps
+        for entry in _items(brief.get('process')):
+            if isinstance(entry, dict) and str(entry.get('step') or '').strip():
+                when = str(entry.get('when') or '').strip().lower()
+                self.process.append({'step': str(entry['step']).strip(), 'when': when if when in ('choose', 'order', 'end') else 'order', 'messages': max(0, _count(entry.get('messages')) or 0)})
+        if self.roles.get('ask'):
+            talk = [p['messages'] for p in self.process if p['when'] in ('order', 'end') and p['messages']]
+            self.reserve = min(max(talk), self.msg_limit) if talk else 0
