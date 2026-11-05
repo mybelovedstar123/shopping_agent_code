@@ -2454,3 +2454,34 @@ class Kyo:
             if named or not text:
                 out[key] = 'Sorry, nothing in the store meets all of your requirements, so I am not buying anything.'[:spec.get('maxLength', 200)]
         return out
+
+    def resolve_ids(self, name: str, args: dict[str, Any]) -> tuple[dict[str, Any], str]:
+        if name not in {self.roles.get(r) for r in ('cart', 'open', 'offer', 'compare')} - {None} or not self.id_key:
+            return (args, '')
+        props = (self.schemas.get(name) or {}).get('properties') or {}
+        free = [k for k, v in props.items() if isinstance(v, dict) and ('string' in _kinds(v) or 'array' in _kinds(v)) and ('enum' not in v)]
+        if len(free) != 1 or (name != self.roles.get('cart') and (name, free[0]) not in self.id_args):
+            return (args, '')
+
+        def fix(value: Any) -> tuple[Any, str]:
+            if isinstance(value, str) and value.strip() in self.rows:
+                return (value.strip(), '')
+            if not isinstance(value, str) or _id_like(value, True) or len(value.strip()) < 8:
+                return (value, '')
+            low = value.strip().lower()
+            hits = [i for i, row in self.rows.items() if any((k != self.id_key and isinstance(v, str) and v.strip().lower().startswith(low) for k, v in row.items()))]
+            if len(hits) == 1:
+                return (hits[0], '')
+            if hits:
+                return (value, f"several listings carry the text {value!r} ({', '.join(hits[:6])}); pass one listing id")
+            return (value, f'{value!r} is not a listing id; pass the id from the result rows (their {self.id_key} field)')
+        out = dict(args)
+        for key in free:
+            if key not in args:
+                continue
+            fixed = [fix(v) for v in args[key]] if isinstance(args[key], list) else [fix(args[key])]
+            problem = next((p for _, p in fixed if p), '')
+            if problem:
+                return (args, problem)
+            out[key] = [v for v, _ in fixed] if isinstance(args[key], list) else fixed[0][0]
+        return (out, '')
