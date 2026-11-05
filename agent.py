@@ -1213,3 +1213,23 @@ class Kyo:
         if opened >= 3 * len(self.items) + 1:
             return True
         return self.step >= max(8, self.max_steps // 4)
+
+    def message_args(self, text: str) -> dict[str, Any] | None:
+        name = self.roles.get('ask')
+        schema = self.schemas.get(name or '') or {}
+        props = schema.get('properties') or {}
+        texts = [k for k, v in props.items() if isinstance(v, dict) and 'string' in _kinds(v) and ('enum' not in v)]
+        target = next((k for k in schema.get('required') or [] if k in texts), None) or (texts[0] if texts else None)
+        if not target:
+            return None
+        args: dict[str, Any] = {target: text}
+        for key in schema.get('required') or []:
+            if key not in args:
+                spec = props.get(key) or {}
+                if isinstance(spec.get('enum'), list) and spec['enum']:
+                    args[key] = spec['enum'][0]
+                else:
+                    return None
+        faults: list[str] = []
+        args = _shape(args, schema, 'args', faults)
+        return None if faults else args
