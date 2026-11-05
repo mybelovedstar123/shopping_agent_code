@@ -1045,3 +1045,22 @@ class Kyo:
         self.trace.append({'kind': 'pages', 'tool': name, 'read': len(texts)})
         rest = f"\n[Kyo] {count} listings matched and Kyo has read {shown * (len(texts) + 1)} rows of them; narrow the search with the requirement's value or page on to see the rest." if value is not None and texts else ''
         return '\n[Kyo read the next pages of this search itself, one step a page]\n' + '\n'.join(texts) + rest if texts else ''
+
+    def cap_ignored(self, name: str, args: dict[str, Any], observation: Any) -> str:
+        props = (self.schemas.get(name) or {}).get('properties') or {}
+
+        def priced(key: str) -> bool:
+            spec = props.get(key) if isinstance(props.get(key), dict) else {}
+            return bool(re.search('price|cost|amount|budget|spend|money', key + ' ' + str(spec.get('description') or ''), re.I))
+        caps = [k for k, v in args.items() if k in props and isinstance(v, (int, float)) and (not isinstance(v, bool)) and re.search('max|most|under|below|limit|cap|upto|up_to', k, re.I) and priced(k)]
+        if not caps or not self.price_key:
+            return ''
+        caps.sort(key=lambda k: args[k])
+        cap = args[caps[0]]
+        over = [i for i, _ in self.records_in(observation) if (self.price_of(i) or 0) > cap]
+        if not over:
+            return ''
+        modes = {k: v for k, v in args.items() if isinstance(v, str) and isinstance((props.get(k) or {}).get('enum'), list)}
+        others = {k: [o for o in props[k]['enum'] if o != v] for k, v in modes.items()}
+        hint = '; list the category with ' + ', '.join((f'{k}={_dump(o[0])}' for k, o in others.items() if o)) + f' and the same {caps[0]} to see only cheaper listings' if any(others.values()) else ''
+        return f'\n[Kyo] This search did not apply {caps[0]}={cap:g}: {len(over)} of its rows cost more{hint}.'
