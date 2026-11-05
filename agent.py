@@ -1233,3 +1233,60 @@ class Kyo:
         faults: list[str] = []
         args = _shape(args, schema, 'args', faults)
         return None if faults else args
+
+    def interview(self) -> str:
+        self.asked = True
+        if self.msgs_free() <= 0:
+            return ''
+        self.widen()
+        lanes = self.plan_lanes(self.msgs_free())
+        found = {n: 0 for n in lanes}
+        spent = {n: 0 for n in lanes}
+        used: dict[int, set[str]] = {n: set() for n in lanes}
+        follow: list[tuple[int, list[str], bool]] = []
+        sent: list[tuple[int, str, str]] = []
+        told: list[str] = []
+        while self.msgs_free() > 0 and (not self.finished) and (self.left() > 6):
+            if follow:
+                number, labels, shown = follow.pop(0)
+            else:
+                number, labels = self.next_ask(lanes, found, spent, used)
+                shown = False
+                if not labels:
+                    break
+            used[number].update((_words(label) for label in labels))
+            batch = self.send([(number, labels[0], self.ask_text(number, labels, shown))])
+            if not batch:
+                break
+            sent += batch
+            spent[number] += 1
+            had = [len(item.told) for item in self.items]
+            heard = self.hear(batch, (LIGHT, HEAVY))
+            self.take_heard(heard, told)
+            fresh = [n for n, item in enumerate(self.items, 1) if len(item.told) > had[n - 1]]
+            for n in fresh:
+                found[n] = found.get(n, 0) + 1
+            if fresh or 1 not in [_count(x) for x in _items(heard.get('crowded'))]:
+                continue
+            head = labels[0].split()[-1]
+            if len(labels[0].split()) >= 2 and _words(head) not in used[number]:
+                follow.insert(0, (number, [head], False))
+            elif not shown and len(self.samples(number, labels[0])) >= 2:
+                follow.insert(0, (number, labels, True))
+        found_items = [n for n in found if found[n] > 0]
+        searched = self.value_search(found_items) if found_items else ''
+        if told:
+            self.version += 1
+        lines = [f'Q: {q}\nA: {a}' for _, q, a in sent]
+        summary = "Kyo's interviewer asked the shopper (each question used one step):\n" + '\n'.join(lines)
+        summary += '\nNew firm requirements from these answers: ' + ('; '.join(told) if told else 'none')
+        summary += '. Apply them to every pick (search again with the new values where needed).'
+        pointed = [need for _, need in self.refs if any((need in t for t in told))]
+        if pointed:
+            summary += ' These take their value from another listing: ' + ' | '.join(pointed) + '. Find that listing, open its page in full, and open every listing its page refers to; the last page gives the value, and the order counts only after all of them are opened.'
+        if searched:
+            summary += '\n' + searched
+        if self.queued:
+            summary += '\n[notes seen meanwhile] ' + ' | '.join(self.queued)
+            self.queued = []
+        return summary
