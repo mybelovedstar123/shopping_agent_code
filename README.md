@@ -16,6 +16,13 @@ The store is not known in advance: tool names, arguments and result shapes diffe
 between stores. Steps, model calls and spend are all limited. Most of the code exists
 to make the final decision reliable under those conditions.
 
+## Project status
+
+This repository is evolving from the single agent described below into a team of
+independent agents inside a complete, self-contained shopping application. See the
+[roadmap](docs/ROADMAP.md) for the plan and schedule. Until the agent team lands, this
+README describes `agent.py`, the existing single agent.
+
 ## At a glance
 
 | | |
@@ -29,6 +36,7 @@ to make the final decision reliable under those conditions.
 
 ## Contents
 
+- [Project status](#project-status)
 - [Architecture](#architecture)
 - [How an episode runs](#how-an-episode-runs)
 - [Prompts and models](#prompts-and-models)
