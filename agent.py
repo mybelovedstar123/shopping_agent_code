@@ -917,3 +917,17 @@ class Kyo:
         if not tool or not target or any((k != target for k in schema.get('required') or [])):
             return None
         return target
+
+    def price_of(self, ident: str) -> float | None:
+        value = (self.rows.get(ident) or {}).get(self.price_key) if self.price_key else None
+        if isinstance(value, dict):
+            value = next((v for v in value.values() if isinstance(v, (int, float)) and (not isinstance(v, bool))), None)
+        if isinstance(value, str) and re.fullmatch('\\s*\\d+(\\.\\d+)?\\s*', value):
+            value = float(value)
+        return float(value) if isinstance(value, (int, float)) and (not isinstance(value, bool)) else None
+
+    def buyable(self, ident: str) -> bool:
+        if self.sold_out(ident):
+            return False
+        value = (self.rows.get(ident) or {}).get(self.stock_key) if self.stock_key else None
+        return not (value is False or (isinstance(value, (int, float)) and (not isinstance(value, bool)) and (value <= 0)))
