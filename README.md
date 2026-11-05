@@ -45,6 +45,7 @@ README describes `agent.py`, the existing single agent.
 - [Running locally](#running-locally)
 - [Configuration](#configuration)
 - [Code map](#code-map)
+- [Development](#development)
 - [Known limitations](#known-limitations)
 
 ## Architecture
@@ -458,6 +459,16 @@ The module reads top to bottom in this order:
 | Decline audit | `audit`, `audit_call`, `audit_fits`, `open_rows`, `cart_calls`, `complete_cart` |
 | Call execution | `is_buy`, `is_refuse`, `offered`, `quiet`, `resolve_ids`, `cart_sets`, `note_cart`, `show`, `compare_target`, `compare_room`, `join_opens`, `run_calls` |
 | Episode control | `finish`, `trim`, `run`, `work`, `agent_main` |
+
+## Development
+
+```bash
+pip install -e ".[dev]"
+ruff check .
+pytest
+```
+
+CI runs the same checks on every pull request and on pushes to `main`.
 
 ## Known limitations
 
