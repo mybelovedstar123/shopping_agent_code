@@ -1390,3 +1390,14 @@ class Kyo:
         if len(labels) >= 2:
             return f'What {labels[0]} or {labels[1]} would you like for the {self.items[number - 1].name}?'
         return self.question(number, labels[0], self.samples(number, labels[0]) if shown else None)
+
+    def lane_keys(self, number: int, table: list[tuple[str, str, int, list[str]]]) -> list[str]:
+        item = self.items[number - 1]
+        settled = [_stem(m.split(':', 1)[0]) for m in item.musts]
+        rows = [(label, key, carried, len(values)) for label, key, carried, values in table if self.owner_of(label) == number]
+        measured = {key: sum((1 for v in values if re.match('^\\s*[\\d.,/x -]+\\s*[a-z]{0,6}\\s*$', v))) * 2 > len(values) for _, key, _, values in table}
+        if len(self.items) == 1 and (not rows):
+            rows = [(label, key, carried, len(values)) for label, key, carried, values in table]
+        rows.sort(key=lambda r: (-r[2], measured.get(r[1], False), -r[3]))
+        keys = [key for _, key, _, _ in rows if not any((_names(prop, _stem(key)) for prop in settled)) and (not re.search(NOT_PROPERTY, key))]
+        return [key for key in keys if not re.search(CATCH_ALL, key)] + [key for key in keys if re.search(CATCH_ALL, key)]
