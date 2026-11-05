@@ -384,3 +384,21 @@ class Kyo:
 
     def cart_mark(self) -> str:
         return _dump(sorted(self.cart_lines.items()))
+
+    def page_tools(self) -> set[str]:
+        page = self.roles.get('offer') or self.roles.get('open')
+        return {t for t in (page, self.roles.get('compare')) if t}
+
+    def facts_tool(self) -> str | None:
+        known = next((t for t, ok in self.facts_from.items() if ok and self.single_target(t)), None)
+        if known:
+            return known
+        tool = self.roles.get('open')
+        return tool if self.facts_from.get(tool or '') is not False and self.single_target(tool) else None
+
+    def compare_facts(self) -> bool | None:
+        return self.facts_from.get(self.roles.get('compare') or '')
+
+    def compare_bare(self) -> bool:
+        seen = self.compare_facts()
+        return seen is False or (seen is None and (self.facts_from.get(self.facts_tool() or '') is True or bool(self.roles.get('offer'))))
