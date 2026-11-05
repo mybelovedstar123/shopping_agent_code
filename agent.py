@@ -1969,3 +1969,35 @@ class Kyo:
             done.append(_dump(args) + ' -> ' + self.show(reply.get('observation'))[:300])
         self.trace.append({'kind': 'count_fix', 'calls': done})
         return done
+
+    def check_key(self, ids: list[str]) -> str:
+        return '|'.join(sorted(ids)) + f'#{self.version}'
+
+    def check_cart(self, ids: list[str] | None=None, limit: float=SPEND_SOFT) -> str:
+        lead = ids is not None
+        ids = ids if lead else self.cart_ids()
+        key = self.check_key(ids)
+        if key in self.checked or not self.judges(limit) or (not ids):
+            return ''
+        self.checked.add(key)
+        prompt = CHECK + '\n\nREQUEST:\n' + self.request + '\n\nREQUIREMENTS IN FORCE:\n' + self.ledger()
+        if lead:
+            quantity = '; '.join((f'item {n}: quantity {it.qty}' for n, it in enumerate(self.items, 1)))
+            prompt += '\n\nCART (planned, judge these listings as if they were carted at the requested quantities: ' + quantity + '):\n' + ', '.join(ids)
+        else:
+            prompt += '\n\nCART:\n' + self.cart_text()
+        prompt += "\n\nRECORDS OF THE CART'S LISTINGS:\n" + '\n'.join((f'{i}: ' + ('SOLD OUT (the store says it can no longer be bought). ' if self.sold_out(i) else '') + self.record_of(i) for i in ids))
+        if self.brief.get('pick') in ('cheapest', 'most', 'least'):
+            prompt += '\n\nOTHER LISTINGS SEEN (newest first):\n' + self.others(ids, 15)
+        got = self.ask_json(prompt, self.judges(limit), 3000)
+        self.trace.append({'kind': 'check', 'cart': ids, 'got': got})
+        self.verdicts[key] = bool(got) and got.get('ok') is not False
+        if not got or got.get('ok') is not False:
+            return ''
+        self.leads = [i for i in self.leads if i not in ids]
+        problems = [str(p) for p in _items(got.get('problems'))][:5]
+        better = [str(b) for b in _items(got.get('better')) if str(b) in self.rows and (not self.sold_out(str(b)))][:4]
+        text = 'A careful review says this cart is not right yet: ' + '; '.join(problems or ['see the requirements'])
+        if better:
+            text += '. Listings that look better: ' + ', '.join(better)
+        return text + '. Fix the cart (or show the review is wrong by re-reading the records), then check out.'
