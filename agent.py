@@ -21,3 +21,5 @@ HISTORY_LIMIT = 150000
 GATE_ROUNDS = 3
 AUTO_PAGES = 6
 CHEAPER_OPENS = 3
+_llm = ProxyClient(timeout=50, max_retries=1, retry_delay=1)
+_env = ProxyClient(timeout=95, max_retries=3, retry_delay=1)
