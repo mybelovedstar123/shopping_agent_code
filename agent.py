@@ -2438,3 +2438,19 @@ class Kyo:
             narrowed = [t for t in tools if t['function']['name'] in keep]
             tools = narrowed or tools
         return tools
+
+    def quiet(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+        schema = self.schemas.get(name) or {}
+        props = schema.get('properties') or {}
+        out = dict(args)
+        for key, spec in props.items():
+            if not isinstance(spec, dict) or 'string' not in _kinds(spec) or 'enum' in spec:
+                continue
+            value = out.get(key)
+            if value is None and key not in (schema.get('required') or []):
+                continue
+            text = str(value or '')
+            named = any((ident in text for ident in self.rows)) or self.brief.get('quiet_decline') is not False
+            if named or not text:
+                out[key] = 'Sorry, nothing in the store meets all of your requirements, so I am not buying anything.'[:spec.get('maxLength', 200)]
+        return out
