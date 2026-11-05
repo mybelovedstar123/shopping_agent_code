@@ -719,3 +719,487 @@ class Kyo:
             text += '\n[changes so far] ' + ' | '.join(self.notes[-4:])
         text += '\n[ledger]\n' + self.ledger()
         return text
+
+    def ident(self, node: Any, in_list: bool=False, depth: int=0) -> str | None:
+        if not isinstance(node, dict) or len(node) < 3:
+            return None
+        if self.id_key and _id_like(node.get(self.id_key), True):
+            return node[self.id_key].strip()
+        nested = any((isinstance(v, dict) for v in node.values()))
+        if not (in_list or depth == 0 or nested):
+            return None
+        found = _learn_id([node])
+        if found and ('id' in str(found).lower() or node[found].strip() in self.rows):
+            return node[found].strip()
+        return None
+
+    def learn_rows(self, node: list[Any]) -> bool:
+        rows = [n for n in node if isinstance(n, dict) and len(n) >= 3]
+        if not rows or len(rows) < len(node) / 2:
+            return False
+        if self.id_key and all((_id_like(r.get(self.id_key), True) for r in rows)):
+            return True
+        found = _learn_id(rows)
+        if found:
+            self.id_key = found
+            return True
+        return False
+
+    def absorb(self, observation: Any) -> None:
+
+        def walk(node: Any, depth: int, in_list: bool=False) -> None:
+            if depth > 6:
+                return
+            if isinstance(node, dict):
+                ident = self.ident(node, in_list, depth)
+                if ident:
+                    if ident not in self.rows:
+                        self.seen_order.append(ident)
+                        self.rows[ident] = {}
+                    old = self.rows[ident]
+                    if any((old.get(k) is True and v is False for k, v in node.items())):
+                        self.unavailable.add(ident)
+                    elif any((old.get(k) is False and v is True for k, v in node.items())):
+                        self.unavailable.discard(ident)
+                    self.rows[ident].update(node)
+                    if _fact_block(node):
+                        self.full[ident] = dict(self.rows[ident])
+                    elif ident in self.full:
+                        self.full[ident].update(node)
+                    return
+                for value in node.values():
+                    walk(value, depth + 1)
+            elif isinstance(node, list):
+                rows = self.learn_rows(node)
+                for value in node:
+                    walk(value, depth + 1, rows)
+        walk(observation, 0)
+
+    def labels(self) -> set[str]:
+        found: set[str] = set()
+
+        def walk(schema: Any, depth: int) -> None:
+            if depth > 6 or not isinstance(schema, dict):
+                return
+            for option in schema.get('enum') or []:
+                if isinstance(option, str):
+                    found.add(option.strip().lower())
+            for value in schema.values():
+                if isinstance(value, dict):
+                    walk(value, depth + 1)
+        for schema in self.schemas.values():
+            walk(schema, 0)
+        return found
+
+    def category_key(self) -> str | None:
+        counts: dict[str, set[str]] = {}
+        present: dict[str, int] = {}
+        for row in self.rows.values():
+            for key, value in row.items():
+                if isinstance(value, str) and 0 < len(value) <= 40 and (not re.search('\\d{3}', value)):
+                    counts.setdefault(key, set()).add(value)
+                    present[key] = present.get(key, 0) + 1
+        total = max(1, len(self.rows))
+        known = self.labels()
+        best = None
+        for key, values in counts.items():
+            if present[key] < 0.8 * total or len(values) > 40:
+                continue
+            listed = sum((1 for v in values if v.strip().lower() in known)) / len(values)
+            mean = sum((len(v) for v in values)) / len(values)
+            score = (-listed, len(values), -present[key], -mean)
+            if best is None or score < best[0]:
+                best = (score, key)
+        return best[1] if best else None
+
+    def key_table(self) -> list[tuple[str, str, int, list[str]]]:
+        cat_key = self.category_key()
+        groups: dict[str, dict[str, Any]] = {}
+        for ident in self.seen_order:
+            record = self.full.get(ident)
+            if not record:
+                continue
+            block = _fact_block(record) or {}
+            label = str(record.get(cat_key) or 'listings') if cat_key else 'listings'
+            group = groups.setdefault(label, {'n': 0, 'keys': {}})
+            group['n'] += 1
+            done: set[str] = set()
+            for key, value in block.items():
+                name = _words(key)
+                if not name or name in done:
+                    continue
+                done.add(name)
+                slot = group['keys'].setdefault(name, {'n': 0, 'values': [], 'per': {}})
+                slot['n'] += 1
+                text = str(value).strip().lower()
+                slot['per'][ident] = text
+                if text not in slot['values']:
+                    slot['values'].append(text)
+        wanted = [(_words(item.shelf or ''), _words(item.name), {w for w in _stem(item.shelf or '') | _stem(item.name) if len(w) >= 4}) for item in self.items]
+        matched = {label for label in groups if any((_words(label) in (shelf, name) or {w for w in _stem(label) if len(w) >= 4} & long for shelf, name, long in wanted)) or self.owner_of(label)}
+        if matched:
+            groups = {label: group for label, group in groups.items() if label in matched}
+        table = []
+        for label, group in sorted(groups.items(), key=lambda kv: -kv[1]['n']):
+            kept: list[tuple[str, dict[str, Any]]] = []
+            for name, slot in sorted(group['keys'].items(), key=lambda kv: (-kv[1]['n'], len(kv[0]))):
+                values = list(slot['per'].values())
+                if not values:
+                    continue
+                mean = sum((len(v) for v in values)) / len(values)
+                if mean > 40 or sum((1 for v in values if ' / ' in v)) * 2 >= len(values):
+                    continue
+                recur = sum((len(set(re.findall('[a-z]{3,}', v)) & set(re.findall('[a-z]{3,}', ' '.join((o for o in values if o is not v))))) > 0 for v in values))
+                if len(values) >= 4 and len(set(values)) == len(values) and (mean > 12) and (recur * 2 < len(values)):
+                    continue
+                twin = next((spec for other, spec in kept if self.twins(other, spec, name, slot)), None)
+                if twin is not None:
+                    for ident, text in slot['per'].items():
+                        twin['per'].setdefault(ident, text)
+                        if text not in twin['values']:
+                            twin['values'].append(text)
+                    twin['n'] = len(twin['per'])
+                    continue
+                kept.append((name, slot))
+            kept.sort(key=lambda kv: -kv[1]['n'])
+            for name, slot in kept[:14]:
+                table.append((label, name, slot['n'], [v[:40] for v in slot['values'][:4]]))
+        return table
+
+    def not_stated(self, label: str, name: str, values: list[str]) -> str:
+        number = self.owner_of(label)
+        if not number:
+            return ''
+        for must in self.items[number - 1].musts:
+            prop, _, value = must.partition(':')
+            if re.search('\\b(?:not|no|other than|unlike|at most|at least|under|over|below|above|less|more|between|within|up to|or)\\b', value, re.I):
+                continue
+            words = set(re.findall('[a-z0-9]{3,}', value.lower()))
+            shown = set(re.findall('[a-z0-9]{3,}', ' '.join(values).lower()))
+            if prop.strip() and _words(prop) != name and _stem(prop) & _stem(name) and words and (not words <= shown):
+                return f' [not the stated {prop.strip()}: another property]'
+        return ''
+
+    @staticmethod
+    def twins(name: str, spec: dict[str, Any], other: str, slot: dict[str, Any]) -> bool:
+        a, b = (set(name.split()), set(other.split()))
+        if not a or not b or (not a & b):
+            return False
+
+        def agree(x: str, y: str) -> bool:
+            wx, wy = (re.findall('[a-z0-9]+', x.lower()), re.findall('[a-z0-9]+', y.lower()))
+            short, long = (wx, wy) if len(wx) <= len(wy) else (wy, wx)
+            return x == y or (bool(short) and set(short) <= set(long) and (len(long) <= 2 * len(short) + 2))
+        both = [i for i in spec['per'] if i in slot['per'] and spec['per'][i].strip() and slot['per'][i].strip()]
+        same = sum((1 for i in both if agree(spec['per'][i], slot['per'][i])))
+        if not (a <= b or b <= a):
+            return len(both) >= 2 and same == len(both)
+        if both:
+            return same * 2 > len(both)
+        return bool((set(spec['values']) & set(slot['values'])) - {''})
+
+    def item_groups(self) -> list[list[str]]:
+        cat_key = self.category_key()
+        groups: dict[str, list[str]] = {}
+        for ident in self.seen_order:
+            label = str(self.rows[ident].get(cat_key) or '') if cat_key else ''
+            groups.setdefault(label, []).append(ident)
+        wanted = [(_words(item.shelf or ''), _words(item.name), {w for w in _stem(item.shelf or '') | _stem(item.name) if len(w) >= 4}) for item in self.items]
+        matched = [ids for label, ids in groups.items() if any((_words(label) in (shelf, name) or {w for w in _stem(label) if len(w) >= 4} & long for shelf, name, long in wanted)) or self.owner_of(label)]
+        pool = matched or list(groups.values())
+        return sorted(pool, key=lambda ids: -len(ids))[:max(1, len(self.items))]
+
+    def single_target(self, tool: str | None) -> str | None:
+        schema = self.schemas.get(tool or '') or {}
+        props = schema.get('properties') or {}
+        texts = [k for k, v in props.items() if isinstance(v, dict) and 'string' in _kinds(v) and ('enum' not in v)]
+        target = next((k for k in schema.get('required') or [] if k in texts), None) or (texts[0] if len(texts) == 1 else None)
+        if not tool or not target or any((k != target for k in schema.get('required') or [])):
+            return None
+        return target
+
+    def price_of(self, ident: str) -> float | None:
+        value = (self.rows.get(ident) or {}).get(self.price_key) if self.price_key else None
+        if isinstance(value, dict):
+            value = next((v for v in value.values() if isinstance(v, (int, float)) and (not isinstance(v, bool))), None)
+        if isinstance(value, str) and re.fullmatch('\\s*\\d+(\\.\\d+)?\\s*', value):
+            value = float(value)
+        return float(value) if isinstance(value, (int, float)) and (not isinstance(value, bool)) else None
+
+    def buyable(self, ident: str) -> bool:
+        if self.sold_out(ident):
+            return False
+        value = (self.rows.get(ident) or {}).get(self.stock_key) if self.stock_key else None
+        return not (value is False or (isinstance(value, (int, float)) and (not isinstance(value, bool)) and (value <= 0)))
+
+    def records_in(self, observation: Any) -> list[tuple[str, dict[str, Any]]]:
+        if isinstance(observation, dict):
+            ident = self.ident(observation)
+            if ident:
+                return [(ident, observation)]
+            found: list[tuple[str, dict[str, Any]]] = []
+            for value in observation.values():
+                if isinstance(value, list):
+                    found += [(i, r) for r in value if isinstance(r, dict) for i in [self.ident(r, True)] if i]
+                elif isinstance(value, dict):
+                    found += [(i, r) for v in value.values() if isinstance(v, list) for r in v if isinstance(r, dict) for i in [self.ident(r, True)] if i]
+            return found
+        if isinstance(observation, list):
+            return [(i, r) for r in observation if isinstance(r, dict) for i in [self.ident(r, True)] if i]
+        return []
+
+    def note_view(self, name: str, observation: Any) -> None:
+        for ident, record in self.records_in(observation):
+            keys = set(record)
+            self.tool_keys.setdefault(name, set()).update(keys)
+            version, have = self.view_keys.get(ident, (-1, set()))
+            self.view_keys[ident] = (self.version, (have if version == self.version else set()) | keys)
+
+    def shown_already(self, name: str, ident: str) -> bool:
+        version, have = self.view_keys.get(ident, (-1, set()))
+        keys = self.tool_keys.get(name)
+        return bool(keys) and version == self.version and (keys <= have) and (ident not in self.gone)
+
+    def read_shape(self, name: str, observation: Any) -> dict[str, Any] | None:
+        if name in self.shapes:
+            return self.shapes[name]
+        if not isinstance(observation, dict):
+            return None
+        lists = [k for k, v in observation.items() if isinstance(v, list) and len(v) >= 2 and all((isinstance(r, dict) for r in v))]
+        if not lists:
+            return None
+        self.shapes[name] = None
+        sample = {k: v[:3] if k in lists else v for k, v in observation.items()}
+        prompt = SHAPE + '\n\nTOOL: ' + name + ' | parameters: ' + _dump(self.schemas.get(name) or {}) + '\n\nRESULT (first rows only):\n' + _dump(_clip(sample, 120))[:4000]
+        got = self.ask_json(prompt, [LIGHT, HEAVY], 2500) or {}
+        rows = got.get('rows') if got.get('rows') in lists else None
+        if not rows:
+            return None
+        first = observation[rows][0]
+        props = (self.schemas.get(name) or {}).get('properties') or {}
+
+        def named(key: Any, where: dict[str, Any]) -> str | None:
+            return key if isinstance(key, str) and key in where else None
+        shape = {'rows': rows, 'count': named(got.get('count'), observation), 'next': named(got.get('next'), observation), 'next_arg': named(got.get('next_arg'), props), 'price': named(got.get('price'), first), 'stock': named(got.get('stock'), first)}
+        if shape['count'] and (isinstance(observation[shape['count']], bool) or not isinstance(observation[shape['count']], int)):
+            shape['count'] = None
+        self.shapes[name] = shape
+        self.price_key = self.price_key or shape['price']
+        self.stock_key = self.stock_key or shape['stock']
+        self.trace.append({'kind': 'shape', 'tool': name, 'shape': shape})
+        return shape
+
+    def paging(self, name: str, observation: Any) -> tuple[int, int, str, Any] | None:
+        shape = self.read_shape(name, observation)
+        if not shape or not shape['count'] or (not shape['next']) or (not shape['next_arg']) or (not isinstance(observation, dict)):
+            return None
+        rows, count, value = (observation.get(shape['rows']), observation.get(shape['count']), observation.get(shape['next']))
+        if not isinstance(rows, list) or not rows or isinstance(count, bool) or (not isinstance(count, int)):
+            return None
+        if value is not None and (isinstance(value, bool) or not isinstance(value, (str, int))):
+            return None
+        return (count, len(rows), shape['next_arg'], value)
+
+    def price_sorted(self, observation: Any) -> bool:
+        prices = [self.price_of(i) for i, _ in self.records_in(observation)]
+        return len(prices) >= 3 and None not in prices and all((a <= b for a, b in zip(prices, prices[1:])))
+
+    def more_pages(self, name: str, args: dict[str, Any], observation: Any) -> str:
+        self.paged_obs = []
+        pick = self.brief.get('pick')
+        plan = self.paging(name, observation) if pick in ('cheapest', 'most', 'least') else None
+        if not plan:
+            return ''
+        count, shown, param, value = plan
+        given = args.get(param)
+        later = given not in (None, 0, 1) if isinstance(given, int) and (not isinstance(given, bool)) else bool(str(given or '').strip())
+        if value is None or later or count <= shown:
+            return ''
+        if pick == 'cheapest' and self.price_sorted(observation):
+            return ''
+        pages = -(-(count - shown) // shown)
+        if pages > 2 and self.pages_read + 2 <= AUTO_PAGES and (self.left() - self.tail() - 2 >= 12):
+            pages = 2
+        if pages > 2 or self.pages_read + pages > AUTO_PAGES or self.left() - self.tail() - pages < 12:
+            return f"\n[Kyo] This search matched {count} listings and showed {shown}, in no price order. The pick counts every fitting listing: search with narrower words (the requirement's value) or page on with {param}={_dump(value)}."
+        texts = []
+        for _ in range(pages):
+            faults: list[str] = []
+            call = _shape({**args, param: value}, self.schemas.get(name), 'args', faults)
+            if faults:
+                break
+            reply = self.act(name, call)
+            if reply is None or self.finished:
+                break
+            self.pages_read += 1
+            seen = reply.get('observation')
+            self.observe(name, seen)
+            self.paged_obs.append(seen)
+            shown_text = self.show(seen)
+            self.read_cache[name + _dump(call)] = (self.version, self.step, shown_text)
+            texts.append(f'{param}={_dump(value)}: {shown_text}')
+            after = self.paging(name, seen)
+            value = after[3] if after else None
+            if value is None:
+                break
+        self.trace.append({'kind': 'pages', 'tool': name, 'read': len(texts)})
+        rest = f"\n[Kyo] {count} listings matched and Kyo has read {shown * (len(texts) + 1)} rows of them; narrow the search with the requirement's value or page on to see the rest." if value is not None and texts else ''
+        return '\n[Kyo read the next pages of this search itself, one step a page]\n' + '\n'.join(texts) + rest if texts else ''
+
+    def cap_ignored(self, name: str, args: dict[str, Any], observation: Any) -> str:
+        props = (self.schemas.get(name) or {}).get('properties') or {}
+
+        def priced(key: str) -> bool:
+            spec = props.get(key) if isinstance(props.get(key), dict) else {}
+            return bool(re.search('price|cost|amount|budget|spend|money', key + ' ' + str(spec.get('description') or ''), re.I))
+        caps = [k for k, v in args.items() if k in props and isinstance(v, (int, float)) and (not isinstance(v, bool)) and re.search('max|most|under|below|limit|cap|upto|up_to', k, re.I) and priced(k)]
+        if not caps or not self.price_key:
+            return ''
+        caps.sort(key=lambda k: args[k])
+        cap = args[caps[0]]
+        over = [i for i, _ in self.records_in(observation) if (self.price_of(i) or 0) > cap]
+        if not over:
+            return ''
+        modes = {k: v for k, v in args.items() if isinstance(v, str) and isinstance((props.get(k) or {}).get('enum'), list)}
+        others = {k: [o for o in props[k]['enum'] if o != v] for k, v in modes.items()}
+        hint = '; list the category with ' + ', '.join((f'{k}={_dump(o[0])}' for k, o in others.items() if o)) + f' and the same {caps[0]} to see only cheaper listings' if any(others.values()) else ''
+        return f'\n[Kyo] This search did not apply {caps[0]}={cap:g}: {len(over)} of its rows cost more{hint}.'
+
+    def cheapest_here(self, observations: list[Any]) -> str:
+        if self.brief.get('pick') != 'cheapest' or not self.price_key:
+            return ''
+        found = {i for seen in observations for i, _ in self.records_in(seen)}
+        rows = [(self.price_of(i), i) for i in found if self.buyable(i) and self.price_of(i) is not None]
+        if len(rows) < 2:
+            return ''
+        return '\n[Kyo] buyable rows here, cheapest first: ' + ', '.join((f'{i} ({p:g})' for p, i in sorted(rows)[:6]))
+
+    def wider_hold(self) -> str:
+        if self.wider_held or self.brief.get('pick') != 'cheapest' or self.left() < 14 + 2 * len(self.items):
+            return ''
+        self.wider_held = True
+        lines = [f'{i} at {self.price_of(i):g}' for i in self.cart_ids() if self.price_of(i) is not None]
+        return f"Not run yet (no step used). {self.left()} steps are left and the pick is the cheapest. Searches match a listing's title, so a requirement's value (often only in the attributes) finds few of the fitting listings, and rows come in no price order. Before checking out, run a few more searches for each item under other names for the product (its plain one-word name, synonyms, words from fitting titles you have seen) and look only at buyable rows priced below the cart's line" + (f" ({'; '.join(lines)})" if lines else '') + '; read the attributes of the cheapest such rows, swap in any that fits, then check out.'
+
+    def fill_facts(self, ids: list[str], keep: int) -> list[str]:
+        tool = self.facts_tool()
+        target = self.single_target(tool)
+        if not tool or not target:
+            return []
+        texts = []
+        for ident in [i for i in ids if i in self.rows and i not in self.full and (not self.sold_out(i))]:
+            if self.left() <= keep or self.finished or self.facts_from.get(tool) is False:
+                break
+            faults: list[str] = []
+            args = _shape({target: ident}, self.schemas.get(tool), 'args', faults)
+            if faults:
+                break
+            reply = self.act(tool, args)
+            if reply is None:
+                break
+            seen = reply.get('observation')
+            self.observe(tool, seen)
+            self.note_view(tool, seen)
+            if isinstance(seen, dict) and self.ident(seen):
+                self.facts_from[tool] = self.facts_from.get(tool, False) or bool(_fact_block(seen))
+            texts.append(f'{ident}: ' + self.show(seen)[:1500])
+        if texts:
+            self.trace.append({'kind': 'fill_facts', 'n': len(texts)})
+        return texts
+
+    def cheaper_rows(self) -> list[str]:
+        if self.brief.get('pick') != 'cheapest':
+            return []
+        mark = self.cart_mark() + f'#{self.version}'
+        cat_key = self.category_key()
+        if mark in self.cheaper_marks or not cat_key:
+            return []
+        self.cheaper_marks.add(mark)
+        cart = self.cart_ids()
+        picks: list[str] = []
+        for line in cart:
+            price = self.price_of(line)
+            kind = str((self.rows.get(line) or {}).get(cat_key) or '').strip().lower()
+            if price is None or not kind:
+                continue
+            pool = [i for i in self.seen_order if i not in cart and i not in self.full and self.buyable(i) and (str((self.rows.get(i) or {}).get(cat_key) or '').strip().lower() == kind) and ((self.price_of(i) if self.price_of(i) is not None else float('inf')) < price)]
+            pool.sort(key=lambda i: self.price_of(i) or 0.0)
+            picks += [i for i in pool[:2] if i not in picks]
+        return self.fill_facts(picks[:CHEAPER_OPENS], self.tail() + 4)
+
+    def observe(self, name: str, observation: Any) -> str:
+        self.absorb(observation)
+        lines = self.loose_lines(observation)
+        if not lines:
+            return ''
+        meaning = self.take_note(lines)
+        if meaning:
+            self.queued.append(f'(seen on {name}) {meaning}')
+        return meaning
+
+    def widen(self) -> None:
+        tool = self.roles.get('compare')
+        schema = self.schemas.get(tool or '') or {}
+        props = schema.get('properties') or {}
+        target = next((k for k, v in props.items() if isinstance(v, dict) and 'array' in _kinds(v)), None)
+        if not tool or not target or any((k != target for k in schema.get('required') or [])) or self.compare_bare():
+            self.widen_singly()
+            return
+        if self.left() <= 12:
+            return
+        cap = props[target].get('maxItems') if isinstance(props[target].get('maxItems'), int) else 4
+        ranked = self.item_groups()
+        share = max(1, cap // max(1, len(ranked)))
+        picks: list[str] = []
+        for ids in ranked:
+            picks += [i for i in ids if i not in self.full][:share]
+        picks = picks[:cap]
+        if len(picks) < 2:
+            return
+        faults: list[str] = []
+        args = _shape({target: picks}, schema, 'args', faults)
+        if faults:
+            return
+        before = len(self.full)
+        reply = self.act(tool, args)
+        if reply is not None:
+            seen = reply.get('observation')
+            self.observe(tool, seen)
+            self.note_view(tool, seen)
+            rows = self.records_in(seen)
+            if rows:
+                self.facts_from[tool] = self.facts_from.get(tool, False) or any((_fact_block(r) for _, r in rows))
+            self.trace.append({'kind': 'widen', 'ids': picks, 'opened': len(self.full) - before})
+            if rows and self.facts_from.get(tool) is False:
+                self.widen_singly()
+                return
+            if len(self.full) == before and len(picks) > 2 and (self.left() > 12):
+                faults = []
+                args = _shape({target: picks[:2]}, schema, 'args', faults)
+                if not faults:
+                    reply = self.act(tool, args)
+                    if reply is not None:
+                        self.observe(tool, reply.get('observation'))
+
+    def widen_singly(self) -> None:
+        tool = self.facts_tool()
+        target = self.single_target(tool)
+        if not tool or not target:
+            return
+        wanted = {w for _, need in self.needs_now() for w in re.findall('[a-z0-9]{3,}', need.split(':', 1)[-1].lower())}
+        each = WIDEN_EACH if len(self.items) <= 2 else 4
+        lanes: list[list[str]] = []
+        heads: list[int] = []
+        for ids in self.item_groups():
+            opened = sum((1 for i in ids if i in self.full))
+            pool = [i for i in ids if i not in self.full and self.buyable(i)]
+            if self.brief.get('pick') == 'cheapest':
+                pool.sort(key=lambda i: self.price_of(i) if self.price_of(i) is not None else float('inf'))
+            pool.sort(key=lambda i: -len(wanted & set(re.findall('[a-z0-9]{3,}', _dump(self.rows.get(i) or {}).lower()))))
+            lanes.append(pool[:max(0, each - opened)])
+            heads.append(max(0, 4 - opened))
+        first = [lane[k] for k in range(4) for lane, head in zip(lanes, heads) if k < min(head, len(lane))]
+        more = [lane[k] for k in range(each) for lane, head in zip(lanes, heads) if head <= k < len(lane)]
+        cap = max(5, 2 * len(lanes) + 2)
+        read = self.fill_facts(first[:cap][:8], 22)
+        self.fill_facts((first[cap:] + more)[:max(0, 10 - len(read))], 30)
