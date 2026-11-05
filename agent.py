@@ -1635,3 +1635,36 @@ class Kyo:
             self.done_steps.append(self.step)
             said.append(f'{name} {_dump(args)} -> {self.show(seen)[:400]}')
         return (True, 'Before going on, Kyo did the steps the request asks for:\n' + '\n'.join(said) if said else '')
+
+    def spoken(self, observation: Any) -> str:
+        if isinstance(observation, str):
+            return observation
+        found: list[str] = []
+
+        def walk(node: Any, depth: int) -> None:
+            if depth > 4:
+                return
+            if isinstance(node, str) and len(node.split()) >= 2:
+                found.append(node)
+            elif isinstance(node, dict):
+                for value in node.values():
+                    walk(value, depth + 1)
+            elif isinstance(node, list):
+                for value in node:
+                    walk(value, depth + 1)
+        walk(observation, 0)
+        return ' '.join(found)[:800] if found else _dump(observation)[:400]
+
+    def loose_lines(self, observation: Any) -> list[str]:
+        lines: list[str] = []
+        if isinstance(observation, dict) and (not self.ident(observation)):
+            for key, value in observation.items():
+                if isinstance(value, str) and len(value.split()) >= 5:
+                    lines.append(value)
+                elif isinstance(value, list) and value and all((isinstance(v, str) for v in value)):
+                    lines.extend((v for v in value if len(v.split()) >= 5))
+                elif isinstance(value, dict) and (not self.ident(value, False, 1)):
+                    for inner in value.values():
+                        if isinstance(inner, str) and len(inner.split()) >= 6:
+                            lines.append(inner)
+        return [line for line in lines if line not in self.heard]
