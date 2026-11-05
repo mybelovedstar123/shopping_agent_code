@@ -2922,3 +2922,27 @@ class Kyo:
                 ids = re.findall('"([A-Za-z0-9][A-Za-z0-9_\\-:.]{5,40})"', content)
                 ids = [i for i in dict.fromkeys(ids) if i in self.rows][:20]
                 self.chat[index]['content'] = content[:400] + f"...(older result shortened; listings in it: {', '.join(ids)})"
+
+    def run(self) -> list[dict[str, Any]]:
+        if self.finished:
+            return self.trace
+        self.read_request()
+        self.trace.append({'kind': 'brief', 'brief': self.brief})
+        opening = self.view.get('opening')
+        if opening is not None:
+            self.absorb(opening)
+        intro = "SHOPPER'S REQUEST:\n" + self.request
+        if opening is not None:
+            intro += '\n\nWHAT THE STORE SHOWS FIRST:\n' + self.show(opening)
+        intro += '\n\nStart by searching for each item in its category and opening several listings in full, so the interviewer can see which properties these listings carry.\n\n' + self.status()
+        self.chat = [{'role': 'system', 'content': GUIDE}, {'role': 'user', 'content': intro}]
+        self.work(LOOP_CALLS, SPEND_HARD)
+        if not self.finished:
+            turned = self.finish(again=True)
+            if turned and (not self.finished) and (not self.broke) and (not self.no_credit) and (self.left() > 1):
+                self.chat.append({'role': 'user', 'content': '[Kyo] Kyo tried to end the episode and ' + turned + '\nApply what the store says, then finish.\n' + self.status()})
+                self.work(self.loop_calls + 10, SPEND_HARD + 0.01)
+            if not self.finished:
+                self.finish()
+        self.trace.append({'kind': 'end', 'finished': self.finished, 'steps': self.step, 'cost': round(self.cost, 5), 'calls': self.calls})
+        return self.trace
