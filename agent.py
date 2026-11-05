@@ -1080,3 +1080,29 @@ class Kyo:
         self.wider_held = True
         lines = [f'{i} at {self.price_of(i):g}' for i in self.cart_ids() if self.price_of(i) is not None]
         return f"Not run yet (no step used). {self.left()} steps are left and the pick is the cheapest. Searches match a listing's title, so a requirement's value (often only in the attributes) finds few of the fitting listings, and rows come in no price order. Before checking out, run a few more searches for each item under other names for the product (its plain one-word name, synonyms, words from fitting titles you have seen) and look only at buyable rows priced below the cart's line" + (f" ({'; '.join(lines)})" if lines else '') + '; read the attributes of the cheapest such rows, swap in any that fits, then check out.'
+
+    def fill_facts(self, ids: list[str], keep: int) -> list[str]:
+        tool = self.facts_tool()
+        target = self.single_target(tool)
+        if not tool or not target:
+            return []
+        texts = []
+        for ident in [i for i in ids if i in self.rows and i not in self.full and (not self.sold_out(i))]:
+            if self.left() <= keep or self.finished or self.facts_from.get(tool) is False:
+                break
+            faults: list[str] = []
+            args = _shape({target: ident}, self.schemas.get(tool), 'args', faults)
+            if faults:
+                break
+            reply = self.act(tool, args)
+            if reply is None:
+                break
+            seen = reply.get('observation')
+            self.observe(tool, seen)
+            self.note_view(tool, seen)
+            if isinstance(seen, dict) and self.ident(seen):
+                self.facts_from[tool] = self.facts_from.get(tool, False) or bool(_fact_block(seen))
+            texts.append(f'{ident}: ' + self.show(seen)[:1500])
+        if texts:
+            self.trace.append({'kind': 'fill_facts', 'n': len(texts)})
+        return texts
