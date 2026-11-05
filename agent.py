@@ -2421,3 +2421,20 @@ class Kyo:
             return False
         fixed = self.brief.get('refuse_args') if isinstance(self.brief.get('refuse_args'), dict) else {}
         return all((args.get(k) == v for k, v in fixed.items()))
+
+    def offered(self) -> list[dict[str, Any]]:
+        left = self.left()
+        ask = self.roles.get('ask')
+        keep: set[str] | None = None
+        ends = {self.roles.get('buy'), self.roles.get('refuse')} - {None}
+        if left <= self.tail():
+            keep = set(ends)
+        elif left <= self.tail() + 3:
+            keep = set(ends) | {self.roles.get('cart'), self.roles.get('cart_view')}
+        elif left <= len(self.items) + 5 and self.buys == 0:
+            keep = set(ends) | {self.roles.get('cart'), self.roles.get('cart_view'), self.roles.get('offer')}
+        tools = [t for t in self.tools if t['function']['name'] != ask]
+        if keep is not None and ends:
+            narrowed = [t for t in tools if t['function']['name'] in keep]
+            tools = narrowed or tools
+        return tools
