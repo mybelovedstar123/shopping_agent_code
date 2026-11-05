@@ -947,3 +947,15 @@ class Kyo:
         if isinstance(observation, list):
             return [(i, r) for r in observation if isinstance(r, dict) for i in [self.ident(r, True)] if i]
         return []
+
+    def note_view(self, name: str, observation: Any) -> None:
+        for ident, record in self.records_in(observation):
+            keys = set(record)
+            self.tool_keys.setdefault(name, set()).update(keys)
+            version, have = self.view_keys.get(ident, (-1, set()))
+            self.view_keys[ident] = (self.version, (have if version == self.version else set()) | keys)
+
+    def shown_already(self, name: str, ident: str) -> bool:
+        version, have = self.view_keys.get(ident, (-1, set()))
+        keys = self.tool_keys.get(name)
+        return bool(keys) and version == self.version and (keys <= have) and (ident not in self.gone)
