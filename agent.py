@@ -251,3 +251,14 @@ def _in_rows(node: Any, ident: str, depth: int=0) -> bool:
     if isinstance(node, dict):
         return any((_in_rows(v, ident, depth + 1) for v in node.values()))
     return False
+
+def _fact_block(node: Any) -> dict[str, Any] | None:
+    if not isinstance(node, dict):
+        return None
+    best = None
+    for value in node.values():
+        if isinstance(value, dict) and len(value) >= 2:
+            scalars = {k: v for k, v in value.items() if isinstance(v, (str, int, float)) and (not isinstance(v, bool))}
+            if len(scalars) >= 2 and (best is None or len(scalars) > len(best)):
+                best = scalars
+    return best
