@@ -774,3 +774,40 @@ class Kyo:
                 for value in node:
                     walk(value, depth + 1, rows)
         walk(observation, 0)
+
+    def labels(self) -> set[str]:
+        found: set[str] = set()
+
+        def walk(schema: Any, depth: int) -> None:
+            if depth > 6 or not isinstance(schema, dict):
+                return
+            for option in schema.get('enum') or []:
+                if isinstance(option, str):
+                    found.add(option.strip().lower())
+            for value in schema.values():
+                if isinstance(value, dict):
+                    walk(value, depth + 1)
+        for schema in self.schemas.values():
+            walk(schema, 0)
+        return found
+
+    def category_key(self) -> str | None:
+        counts: dict[str, set[str]] = {}
+        present: dict[str, int] = {}
+        for row in self.rows.values():
+            for key, value in row.items():
+                if isinstance(value, str) and 0 < len(value) <= 40 and (not re.search('\\d{3}', value)):
+                    counts.setdefault(key, set()).add(value)
+                    present[key] = present.get(key, 0) + 1
+        total = max(1, len(self.rows))
+        known = self.labels()
+        best = None
+        for key, values in counts.items():
+            if present[key] < 0.8 * total or len(values) > 40:
+                continue
+            listed = sum((1 for v in values if v.strip().lower() in known)) / len(values)
+            mean = sum((len(v) for v in values)) / len(values)
+            score = (-listed, len(values), -present[key], -mean)
+            if best is None or score < best[0]:
+                best = (score, key)
+        return best[1] if best else None
