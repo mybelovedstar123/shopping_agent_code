@@ -608,3 +608,20 @@ class Kyo:
         shelves = [_words(str(e.get('shelf') or '')) for e in _items(brief.get('items')) if isinstance(e, dict)]
         shelves = [s for s in shelves if s]
         return len(shelves) != len(set(shelves))
+
+    def unmix(self) -> None:
+        for number, item in enumerate(self.items, 1):
+            pointers = [need for n, need in self.refs if n == number and need in item.musts]
+            rest = [m for m in item.musts if m not in pointers]
+            if not pointers or not rest:
+                continue
+            prompt = UNMIX + '\n\nREQUEST:\n' + self.request + f'\n\nPRODUCT: {item.name}\nREQUIREMENTS POINTING AT ANOTHER LISTING:\n' + '\n'.join(pointers) + '\nOTHER REQUIREMENTS:\n' + '\n'.join(rest)
+            got = self.ask_json(prompt, [HEAVY, LIGHT], 1500) or {}
+            moved = [m for m in rest if m in [str(x).strip() for x in _items(got.get('describe_other'))]]
+            if not moved:
+                continue
+            item.musts = [m for m in item.musts if m not in moved]
+            joined = pointers[0] + ' (that listing: ' + '; '.join(moved) + ')'
+            item.musts = [joined if m == pointers[0] else m for m in item.musts]
+            self.refs = [(n, joined if (n, need) == (number, pointers[0]) else need) for n, need in self.refs]
+            self.trace.append({'kind': 'unmix', 'item': number, 'moved': moved})
