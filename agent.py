@@ -1765,3 +1765,29 @@ class Kyo:
         if not lines:
             return ''
         return "[evidence: keys whose names contain a requirement's property; one naming a different property (another part or aspect) decides nothing, and a key with another name may still hold the same property] " + ' | '.join(lines)
+
+    def cart_text(self) -> str:
+        if self.cart_view is not None and self.cart_seen_at >= self.cart_at:
+            return _dump(_clip(self.cart_view, 300))[:3000]
+        return "lines by Kyo's record of the cart calls (listing: units): " + _dump(self.cart_lines)
+
+    def held_units(self, ident: str) -> int:
+        if self.cart_view is not None and self.cart_seen_at >= self.cart_at:
+            stack: list[Any] = [self.cart_view]
+            while stack:
+                node = stack.pop()
+                if isinstance(node, dict):
+                    if ident in [v.strip() for v in node.values() if isinstance(v, str)]:
+                        counts = [_count(v) for k, v in node.items() if not isinstance(v, str) and _count(v) is not None and re.search('\\b(?:qty|quantity|count|units?)\\b', _words(k))]
+                        if len(counts) == 1:
+                            return counts[0]
+                    stack += [v for v in node.values() if isinstance(v, (dict, list))]
+                elif isinstance(node, list):
+                    stack += node
+        return self.cart_lines.get(ident, 1)
+
+    def cart_ids(self) -> list[str]:
+        if self.cart_view is not None and self.cart_seen_at >= self.cart_at:
+            text = _dump(self.cart_view)
+            return [i for i in self.rows if i in text]
+        return list(self.cart_lines)
