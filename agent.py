@@ -1377,3 +1377,16 @@ class Kyo:
             return ''
         self.trace.append({'kind': 'value_search', 'seen': [s[:200] for s in seen]})
         return "[Kyo searched each such item's requirement values together and read the first fitting-kind rows] " + '\n'.join(seen)
+
+    def next_ask(self, lanes: dict[int, list[str]], found: dict[int, int], spent: dict[int, int], used: dict[int, set[str]]) -> tuple[int, list[str]]:
+        first = {n: i for i, n in enumerate(self.plan_order)}
+        for number in sorted(lanes, key=lambda n: (found.get(n, 0) > 0, spent.get(n, 0), first.get(n, len(first) + n))):
+            left = [label for label in lanes[number] if _words(label) not in used[number]]
+            if left:
+                return (number, left[:1])
+        return (0, [])
+
+    def ask_text(self, number: int, labels: list[str], shown: bool=False) -> str:
+        if len(labels) >= 2:
+            return f'What {labels[0]} or {labels[1]} would you like for the {self.items[number - 1].name}?'
+        return self.question(number, labels[0], self.samples(number, labels[0]) if shown else None)
