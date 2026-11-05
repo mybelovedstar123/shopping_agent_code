@@ -223,3 +223,22 @@ def _count(value: Any) -> int | None:
     if isinstance(value, str) and re.fullmatch('\\s*\\d+(\\.0+)?\\s*', value):
         return int(float(value))
     return None
+
+def _id_like(value: Any, named: bool=False) -> bool:
+    if not isinstance(value, str) or not 3 <= len(value.strip()) <= 64 or ' ' in value.strip():
+        return False
+    return named or bool(re.search('\\d', value))
+
+def _learn_id(rows: list[dict[str, Any]]) -> str | None:
+    best = None
+    for key in rows[0]:
+        values = [row.get(key) for row in rows]
+        if not all((_id_like(v, 'id' in str(key).lower()) for v in values)):
+            continue
+        values = [v.strip() for v in values]
+        if len(rows) > 1 and len(set(values)) < len(values):
+            continue
+        score = ('id' in str(key).lower(), sum((len(v) for v in values)) / len(values))
+        if best is None or score > best[0]:
+            best = (score, key)
+    return best[1] if best else None
