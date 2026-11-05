@@ -2910,3 +2910,15 @@ class Kyo:
                     self.observe(refuse, reply.get('observation'))
                     return 'ending without a purchase was refused: ' + self.show(reply.get('observation'))
         return ''
+
+    def trim(self) -> None:
+        size = sum((len(_dump(m.get('content'))) for m in self.chat))
+        if size <= HISTORY_LIMIT:
+            return
+        tools = [i for i, m in enumerate(self.chat) if m.get('role') == 'tool']
+        for index in tools[:max(1, len(tools) // 2)]:
+            content = self.chat[index].get('content') or ''
+            if len(content) > 600:
+                ids = re.findall('"([A-Za-z0-9][A-Za-z0-9_\\-:.]{5,40})"', content)
+                ids = [i for i in dict.fromkeys(ids) if i in self.rows][:20]
+                self.chat[index]['content'] = content[:400] + f"...(older result shortened; listings in it: {', '.join(ids)})"
