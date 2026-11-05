@@ -473,8 +473,8 @@ CI runs the same checks on every pull request and on pushes to `main`.
 ## Known limitations
 
 - **`ProxyClient` is external.** The module cannot be imported without it.
-- **No automated tests.** Behaviour depends on live models and stores, and there is no
-  evaluation data or benchmark in this repository. The stub above only proves the wiring.
+- **Offline tests only.** `tests/legacy` covers the agent's control flow with a scripted
+  model and store. No test measures its results against live models or real stores.
 - **Spend tracking needs `usage.cost`.** If the proxy omits it, spend stays at 0 and the
   spend limits never trigger. The call limits still apply.
 - **The final review fails open.** If a judge is unavailable or returns nothing,
