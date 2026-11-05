@@ -1003,3 +1003,45 @@ class Kyo:
     def price_sorted(self, observation: Any) -> bool:
         prices = [self.price_of(i) for i, _ in self.records_in(observation)]
         return len(prices) >= 3 and None not in prices and all((a <= b for a, b in zip(prices, prices[1:])))
+
+    def more_pages(self, name: str, args: dict[str, Any], observation: Any) -> str:
+        self.paged_obs = []
+        pick = self.brief.get('pick')
+        plan = self.paging(name, observation) if pick in ('cheapest', 'most', 'least') else None
+        if not plan:
+            return ''
+        count, shown, param, value = plan
+        given = args.get(param)
+        later = given not in (None, 0, 1) if isinstance(given, int) and (not isinstance(given, bool)) else bool(str(given or '').strip())
+        if value is None or later or count <= shown:
+            return ''
+        if pick == 'cheapest' and self.price_sorted(observation):
+            return ''
+        pages = -(-(count - shown) // shown)
+        if pages > 2 and self.pages_read + 2 <= AUTO_PAGES and (self.left() - self.tail() - 2 >= 12):
+            pages = 2
+        if pages > 2 or self.pages_read + pages > AUTO_PAGES or self.left() - self.tail() - pages < 12:
+            return f"\n[Kyo] This search matched {count} listings and showed {shown}, in no price order. The pick counts every fitting listing: search with narrower words (the requirement's value) or page on with {param}={_dump(value)}."
+        texts = []
+        for _ in range(pages):
+            faults: list[str] = []
+            call = _shape({**args, param: value}, self.schemas.get(name), 'args', faults)
+            if faults:
+                break
+            reply = self.act(name, call)
+            if reply is None or self.finished:
+                break
+            self.pages_read += 1
+            seen = reply.get('observation')
+            self.observe(name, seen)
+            self.paged_obs.append(seen)
+            shown_text = self.show(seen)
+            self.read_cache[name + _dump(call)] = (self.version, self.step, shown_text)
+            texts.append(f'{param}={_dump(value)}: {shown_text}')
+            after = self.paging(name, seen)
+            value = after[3] if after else None
+            if value is None:
+                break
+        self.trace.append({'kind': 'pages', 'tool': name, 'read': len(texts)})
+        rest = f"\n[Kyo] {count} listings matched and Kyo has read {shown * (len(texts) + 1)} rows of them; narrow the search with the requirement's value or page on to see the rest." if value is not None and texts else ''
+        return '\n[Kyo read the next pages of this search itself, one step a page]\n' + '\n'.join(texts) + rest if texts else ''
