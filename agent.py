@@ -1506,3 +1506,15 @@ class Kyo:
             lanes[number] = [x for x in lanes[number] if not re.search(CATCH_ALL, _words(x))] + [x for x in lanes[number] if re.search(CATCH_ALL, _words(x))]
         self.trace.append({'kind': 'plan', 'ask': _clip(plan.get('ask'), 120), 'lanes': {n: v[:8] for n, v in lanes.items()}})
         return lanes
+
+    def question(self, number: int, label: str, samples: list[str] | None=None) -> str:
+        text = f'What {label} would you like for the {self.items[number - 1].name}'
+        return text + (f', for example {samples[0]} or {samples[1]}?' if samples else '?')
+
+    def samples(self, number: int, label: str) -> list[str]:
+        want = _words(label)
+        settled = ' '.join(self.items[number - 1].musts).lower()
+        for _, name, _, values in self.key_table():
+            if name == want:
+                return [v for v in values if v and v not in settled and (len(v) <= 30)][:2]
+        return []
