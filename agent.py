@@ -2872,3 +2872,41 @@ class Kyo:
                 text += ' [episode finished]'
             out.append((cid, text))
         return out
+
+    def finish(self, again: bool=False) -> str:
+        if self.finished or self.broke or self.left() <= 0:
+            return ''
+        buy, refuse = (self.roles.get('buy'), self.roles.get('refuse'))
+        fresh = self.cart_view is not None and self.cart_seen_at >= self.cart_at
+        holding = bool(self.cart_ids()) if fresh else bool(self.cart_lines)
+        if buy and (holding or (self.cart_touched and (not fresh) and (self.left() >= 2))):
+            faults: list[str] = []
+            args = _shape(dict(self.brief.get('buy_args') or {}), self.schemas.get(buy), 'args', faults)
+            if not faults:
+                if self.left() >= 2:
+                    self.gate('order')
+                if self.finished or self.left() <= 0:
+                    return ''
+                reply = self.act(buy, args)
+                self.trace.append({'kind': 'forced_buy', 'reply': _clip(reply, 200)})
+                if self.finished or self.left() <= 0:
+                    return ''
+                if reply is not None and again:
+                    self.buys += 1
+                    self.refused_at = self.step
+                    self.observe(buy, reply.get('observation'))
+                    return 'the checkout was refused: ' + self.show(reply.get('observation'))
+        if refuse:
+            faults = []
+            args = _shape(self.quiet(refuse, dict(self.brief.get('refuse_args') or {})), self.schemas.get(refuse), 'args', faults)
+            if not faults:
+                if self.left() >= 2:
+                    self.gate('end')
+                if self.finished or self.left() <= 0:
+                    return ''
+                reply = self.act(refuse, args)
+                self.trace.append({'kind': 'forced_refuse', 'reply': _clip(reply, 200)})
+                if reply is not None and (not self.finished):
+                    self.observe(refuse, reply.get('observation'))
+                    return 'ending without a purchase was refused: ' + self.show(reply.get('observation'))
+        return ''
