@@ -436,3 +436,35 @@ class Kyo:
                 self.no_credit = True
                 return None
         return None
+
+    def call_model(self, model: str, messages: list[dict[str, Any]], max_tokens: int, tools: list[dict[str, Any]] | None) -> tuple[dict[str, Any] | None, Any]:
+        sent = messages
+        if model.startswith('anthropic/') and len(messages) > 1:
+            sent = [dict(m) for m in messages]
+            marks = [0] + ([len(sent) - 1] if len(sent) > 1 else [])
+            for index in marks:
+                content = sent[index].get('content')
+                if isinstance(content, str) and content:
+                    sent[index]['content'] = [{'type': 'text', 'text': content, 'cache_control': {'type': 'ephemeral'}}]
+        body: dict[str, Any] = {'model': model, 'messages': sent, 'max_tokens': max_tokens, 'temperature': 0}
+        if tools:
+            body['tools'] = tools
+            body['tool_choice'] = 'auto'
+        result = _llm.post_verbose('/inference/chat/completions', body)
+        data = result.data
+        if isinstance(data, dict) and data.get('choices'):
+            usage = data.get('usage') or {}
+            if isinstance(usage.get('cost'), (int, float)):
+                self.cost += float(usage['cost'])
+            message = data['choices'][0].get('message') or {}
+            if message.get('content') or message.get('tool_calls'):
+                return (message, 200)
+            self.trace.append({'kind': 'llm_fail', 'model': model, 'status': 0})
+            return (None, 0)
+        error = result.error or {}
+        status = error.get('status')
+        if isinstance(data, dict) and isinstance(data.get('error'), dict):
+            status = _count(data['error'].get('code'))
+            error = {'body': data['error'].get('message')}
+        self.trace.append({'kind': 'llm_fail', 'model': model, 'status': status, 'body': str(error.get('body') or '')[:200]})
+        return (None, status)
