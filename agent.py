@@ -375,3 +375,12 @@ class Kyo:
         self.searched: list[dict[str, Any]] = []
         self.link_searches = 0
         self.link_seen: dict[str, list[str]] = {}
+
+    def left(self) -> int:
+        return self.max_steps - self.step
+
+    def msgs_free(self) -> int:
+        return self.msg_limit - self.msg_used - max(0, self.reserve - self.gate_msgs)
+
+    def cart_mark(self) -> str:
+        return _dump(sorted(self.cart_lines.items()))
