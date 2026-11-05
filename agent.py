@@ -1290,3 +1290,31 @@ class Kyo:
             summary += '\n[notes seen meanwhile] ' + ' | '.join(self.queued)
             self.queued = []
         return summary
+
+    def search_template(self) -> tuple[str, dict[str, Any], str] | None:
+        tool = self.roles.get('search')
+        schema = self.schemas.get(tool or '') or {}
+        props = schema.get('properties') or {}
+        texts = [k for k, v in props.items() if isinstance(v, dict) and 'string' in _kinds(v) and ('enum' not in v)]
+        named = [k for k in texts if re.search('(?:^|_)(?:q|query|search|text|phrase|keywords?|terms?|words?)(?:_|$)|query|phrase|keyword', k, re.I)]
+        for args in reversed(self.searched):
+            fields = [k for k in named or texts if isinstance(args.get(k), str) and re.search('[a-z]', args[k], re.I)]
+            if not named:
+                labels = {str(r.get(self.category_key()) or '').strip().lower() for r in self.rows.values()} - {''} if self.category_key() else set()
+                fields = [k for k in fields if len({str(a.get(k)) for a in self.searched if a.get(k)}) >= 2 and any((len(str(a.get(k)).split()) >= 2 for a in self.searched)) and (not any((str(a.get(k) or '').strip().lower() in labels for a in self.searched)))]
+            if fields and tool:
+                field = fields[0]
+                keep = {k: v for k, v in args.items() if k != field and (isinstance((props.get(k) or {}).get('enum'), list) or k in (schema.get('required') or []))}
+                cat_key = self.category_key()
+                shelves = {_words(item.shelf or '') for item in self.items} | {_words(item.name) for item in self.items}
+                shelves |= {_words(str(row.get(cat_key) or '')) for row in self.rows.values()} if cat_key else set()
+                keep = {k: v for k, v in keep.items() if k in (schema.get('required') or []) or not isinstance(v, str) or (_words(v) not in shelves and (not any(({w for w in _stem(v) if len(w) >= 4} & {w for w in _stem(s) if len(w) >= 4} for s in shelves if s))))}
+                worded = [a for a in self.searched if isinstance(a.get(field), str) and re.search('[a-z]', a[field], re.I)]
+                for k in list(keep):
+                    if isinstance((props.get(k) or {}).get('enum'), list):
+                        used = [_dump(a[k]) for a in worded if k in a]
+                        if used:
+                            best = max(used, key=used.count)
+                            keep[k] = next((a[k] for a in worded if k in a and _dump(a[k]) == best))
+                return (tool, keep, field)
+        return None
