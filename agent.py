@@ -402,3 +402,10 @@ class Kyo:
     def compare_bare(self) -> bool:
         seen = self.compare_facts()
         return seen is False or (seen is None and (self.facts_from.get(self.facts_tool() or '') is True or bool(self.roles.get('offer'))))
+
+    def gate_due(self, stage: str) -> bool:
+        return any((p['when'] == stage for p in self.process)) and (stage, self.cart_mark() + f'#{self.version}') not in self.gate_ok
+
+    def tail(self) -> int:
+        talk = any((p['when'] == 'order' and p['messages'] > 0 for p in self.process))
+        return 2 if talk and self.msg_used < self.msg_limit and self.gate_due('order') else 1
