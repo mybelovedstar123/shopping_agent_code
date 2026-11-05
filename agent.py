@@ -42,3 +42,5 @@ GUARD_GAP = 0.34
 NOT_PROPERTY = '\\b(?:options?|variants?|models?|sku|ids?|codes?|asin|upc|ean|barcodes?|warrant\\w*|video|url|links?|images?|photos?|condition)\\b'
 CATCH_ALL = '^(?!.*\\b(?:types?|styles?|kinds?|shapes?)\\b).*\\b(?:features?|functions?|highlights?|specs?|specifications?|descriptions?|includ\\w*|accessor\\w*|extras?|misc\\w*)\\b'
 WIDEN_EACH = 6
+FIT_CODE = '[A-Z][A-Za-z]{0,5} ?\\d{3,6}'
+PART_CODE = '[A-Z]{1,4}\\d{3,6}'
