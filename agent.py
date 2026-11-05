@@ -2409,3 +2409,15 @@ class Kyo:
         if not replies:
             return ''
         return 'Not run (Kyo acted instead): the independent check confirmed ' + self.confirmed + ', so Kyo set the cart (' + '; '.join(done) + ') and checked out. Store reply: ' + ' | then: '.join(replies)
+
+    def is_buy(self, name: str, args: dict[str, Any]) -> bool:
+        if name != self.roles.get('buy'):
+            return False
+        fixed = self.brief.get('buy_args') if isinstance(self.brief.get('buy_args'), dict) else {}
+        return all((args.get(k) == v for k, v in fixed.items()))
+
+    def is_refuse(self, name: str, args: dict[str, Any]) -> bool:
+        if name != self.roles.get('refuse'):
+            return False
+        fixed = self.brief.get('refuse_args') if isinstance(self.brief.get('refuse_args'), dict) else {}
+        return all((args.get(k) == v for k, v in fixed.items()))
