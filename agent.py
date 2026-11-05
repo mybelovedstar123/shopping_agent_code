@@ -1809,3 +1809,27 @@ class Kyo:
             if len(lines) >= limit:
                 break
         return '\n'.join(lines)
+
+    def fit_index(self) -> dict[str, Any]:
+        marks: dict[str, dict[str, Any]] = {}
+        notes: dict[str, set[str]] = {}
+        for ident in self.seen_order:
+            record = self.full.get(ident) or self.rows.get(ident) or {}
+            text = ' '.join((str(v) for v in record.values() if isinstance(v, str)))
+            text += ' ' + '. '.join((f'{k} {v}' for block in record.values() if isinstance(block, dict) for k, v in block.items() if isinstance(v, str)))
+            marks[ident] = _fit_marks(text)
+            for part, codes in marks[ident]['also']:
+                notes.setdefault(part, set()).update(codes)
+        return {'marks': marks, 'notes': notes}
+
+    def fit_set(self, ident: str, index: dict[str, Any]) -> set[str]:
+        mark = index['marks'].get(ident) or {}
+        found = set(mark.get('works') or [])
+        if mark.get('own'):
+            found |= index['notes'].get(mark['own'], set())
+        return found
+
+    def item_ids(self, number: int) -> list[str]:
+        cat_key = self.category_key()
+        item = self.items[number - 1]
+        return [i for i in self.seen_order if cat_key and self.owns(item, str((self.rows.get(i) or {}).get(cat_key) or ''))]
