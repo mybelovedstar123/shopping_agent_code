@@ -2536,3 +2536,9 @@ class Kyo:
                 self.cart_lines[ident] = have
             else:
                 self.cart_lines.pop(ident, None)
+
+    def show(self, observation: Any) -> str:
+        text = _dump(_clip(observation, SHOW_CHARS))
+        if len(text) > OBS_LIMIT:
+            text = text[:OBS_LIMIT] + '...(cut)'
+        return text
