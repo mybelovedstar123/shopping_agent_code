@@ -1203,3 +1203,13 @@ class Kyo:
         cap = max(5, 2 * len(lanes) + 2)
         read = self.fill_facts(first[:cap][:8], 22)
         self.fill_facts((first[cap:] + more)[:max(0, 10 - len(read))], 30)
+
+    def ready_to_ask(self) -> bool:
+        if self.asked or not self.roles.get('ask') or self.msgs_free() <= 0:
+            return False
+        if self.left() <= 8:
+            return False
+        opened = len(self.full)
+        if opened >= 3 * len(self.items) + 1:
+            return True
+        return self.step >= max(8, self.max_steps // 4)
