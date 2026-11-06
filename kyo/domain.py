@@ -72,6 +72,7 @@ class Brief:
     quiet_decline: bool = True
     wishes: list[str] = field(default_factory=list)
     fits: list[dict[str, int]] = field(default_factory=list)
+    lookups: list[str] = field(default_factory=list)
     roles: dict[str, str] = field(default_factory=dict)
     buy_args: dict[str, Any] = field(default_factory=dict)
     refuse_args: dict[str, Any] = field(default_factory=dict)
