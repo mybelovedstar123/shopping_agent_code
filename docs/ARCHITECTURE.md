@@ -55,6 +55,19 @@ The rules that make the agents independent:
 Only the coordinator knows the overall workflow. It asks agents for results and never
 reaches into their state.
 
+## What the team does not do yet
+
+The team replaces most of `Kyo`, but not all of it:
+
+- **Requirements that point at another listing** ("the same colour as the kettle Ovarno
+  sells") are not followed. They are returned in the result's `unverified` list and are not
+  checked by the rules. `trail` and `find_link` in `agent.py` have no equivalent yet.
+- **The conversational buying loop is gone.** `GUIDE` is unused: the coordinator's workflow
+  chooses every step, and models only help with specific decisions. This makes runs
+  predictable and testable, but a model cannot improvise around an unusual store.
+- **The model paths are tested with scripted replies only.** They have not been run against
+  a live model.
+
 ## The application around the team
 
 ```
