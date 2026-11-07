@@ -21,8 +21,39 @@ to make the final decision reliable under those conditions.
 This repository is evolving from the single agent described below into a team of
 independent agents inside a complete, self-contained shopping application. See the
 [roadmap](docs/ROADMAP.md) for the plan and schedule, and the
-[architecture](docs/ARCHITECTURE.md) for the design. Until the agent team lands, this
-README describes `agent.py`, the existing single agent.
+[architecture](docs/ARCHITECTURE.md) for the design.
+
+The agent team now shops end to end. The store and web application are still to come, so
+most of this README still describes `agent.py`, the single agent the team grew from.
+
+## The agent team
+
+```python
+from kyo.scenarios.store import Product, ScenarioStore
+from kyo.team import run_team
+
+store = ScenarioStore([Product("L1", "Desk lamp", "Desk Lamps", 20.0, {"colour": "red"})])
+result = run_team("Buy a red desk lamp.", store)
+print(result["outcome"], result["lines"], result["total"])  # purchased {'L1': 1} 20.0
+```
+
+| Agent | Job |
+|---|---|
+| `coordinator` | Runs the workflow by asking the others for results |
+| `request` | Turns the shopper's words into a structured brief |
+| `gateway` | The only door to the store: counts steps and validates arguments |
+| `catalog` | Searches, pages, opens and remembers listings |
+| `interview` | Asks about preferences the request left unstated |
+| `selection` | Chooses the listing for each item, and says why others failed |
+| `cart` | The only agent that changes the cart, and notices when it drifts |
+| `review` | Independently judges carts before checkout and declines before they end |
+| `process` | Carries out steps the request demands, such as approval |
+| `notes` | Reads free text in store replies for changes to the task |
+
+Each agent has its own mailbox and thread, and agents share no memory. Everything they
+exchange is a JSON message, so any agent can also run in its own process. The team works
+with no model at all, using rules. Set `KYO_MODEL_BASE_URL`, `KYO_MODEL_NAME` and
+`KYO_MODEL_API_KEY`, then pass `model_from_env()` to `run_team`, to add a model's judgement.
 
 ## At a glance
 
@@ -38,6 +69,7 @@ README describes `agent.py`, the existing single agent.
 ## Contents
 
 - [Project status](#project-status)
+- [The agent team](#the-agent-team)
 - [Architecture](#architecture)
 - [How an episode runs](#how-an-episode-runs)
 - [Prompts and models](#prompts-and-models)
