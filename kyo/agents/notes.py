@@ -16,7 +16,7 @@ BUDGET = re.compile(
     re.I,
 )
 SOLD_OUT = re.compile(
-    r"\b(sold out|no longer available|out of stock|cannot be bought|can no longer be bought|discontinued|unavailable)\b",
+    r"\b(sold out|no longer available|out of stock|cannot be bought|can no longer be bought|discontinued|unavailable|enough stock)\b",
     re.I,
 )
 PRICE_MOVED = re.compile(
