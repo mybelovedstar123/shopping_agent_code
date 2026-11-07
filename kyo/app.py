@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from sqlalchemy.orm import Session, sessionmaker
 
 from . import __version__
+from .api.accounts import router as accounts_router
 from .api.catalog import router as catalog_router
 from .store.db import make_engine, make_sessions
 from .store.models import Base
@@ -27,6 +28,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.engine = engine
     app.state.sessions = make_sessions(engine)
     app.include_router(catalog_router, prefix="/api")
+    app.include_router(accounts_router, prefix="/api")
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
