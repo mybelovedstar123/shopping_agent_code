@@ -11,6 +11,7 @@ from . import __version__
 from .api.accounts import router as accounts_router
 from .api.cart import router as cart_router
 from .api.catalog import router as catalog_router
+from .api.orders import router as orders_router
 from .store.db import make_engine, make_sessions
 from .store.models import Base
 
@@ -31,6 +32,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(catalog_router, prefix="/api")
     app.include_router(accounts_router, prefix="/api")
     app.include_router(cart_router, prefix="/api")
+    app.include_router(orders_router, prefix="/api")
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
