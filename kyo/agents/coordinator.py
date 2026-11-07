@@ -388,8 +388,13 @@ class _Episode:
         )
         if not reply.get("ok"):
             return self.result("unfinished", str(reply.get("error")))
+        observation = reply.get("observation")
+        observation = observation if isinstance(observation, dict) else {}
         if reply.get("finished"):
-            return self.result("purchased", "the order was placed", lines)
+            if observation.get("accepted") is False:
+                note = observation.get("note") or "the store did not accept the order"
+                return self.result("declined", str(note))
+            return self.result("purchased", "the order was placed", lines, observation)
         self.buys_refused += 1
         notes = self.apply_notes()
         if notes.get("gone") or notes.get("sold_out"):
@@ -452,7 +457,13 @@ class _Episode:
             return None
         return self.finish_order(lines)
 
-    def result(self, outcome: str, reason: str, lines: dict[str, int] | None = None):
+    def result(
+        self,
+        outcome: str,
+        reason: str,
+        lines: dict[str, int] | None = None,
+        observation: dict[str, Any] | None = None,
+    ):
         status = self.ask("gateway", "status")
         summary = self.cart_summary(lines) if lines else {"lines": {}, "total": None}
         reviews = [r for r in self.model_reviews if r != "none"]
@@ -462,6 +473,7 @@ class _Episode:
             "lines": summary["lines"],
             "total": summary["total"],
             "steps": status["step"],
+            "order_id": (observation or {}).get("order_id"),
             "brief": self.brief.to_dict(),
             "unverified": list(self.brief.lookups),
             "model_review": reviews[-1] if reviews else "none",
