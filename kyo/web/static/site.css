@@ -117,3 +117,8 @@ button.link { background: none; border: 0; padding: 0; color: var(--accent); tex
 @media (max-width: 640px) {
   .search-layout { grid-template-columns: 1fr; }
 }
+
+.narrow { max-width: 420px; margin: 0 auto; }
+.stacked { display: flex; flex-direction: column; gap: 0.875rem; }
+.stacked label { display: flex; flex-direction: column; gap: 0.25rem; font-weight: 500; }
+.who { color: var(--muted); }

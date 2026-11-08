@@ -15,7 +15,13 @@
       <button type="submit">Search</button>
     </form>
     <nav class="site-nav" aria-label="Main">
-      {% block nav %}{% endblock %}
+      {% if request.state.user %}
+      <span class="who">{{ request.state.user.name }}</span>
+      <form action="/logout" method="post"><button class="link" type="submit">Log out</button></form>
+      {% else %}
+      <a href="/login">Log in</a>
+      <a href="/register">Create account</a>
+      {% endif %}
     </nav>
   </header>
   <main class="page">
