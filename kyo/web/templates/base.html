@@ -16,6 +16,7 @@
     </form>
     <nav class="site-nav" aria-label="Main">
       {% if request.state.user %}
+      <a href="/assistant">Assistant</a>
       <a href="/cart">Cart</a>
       <a href="/orders">Orders</a>
       <span class="who">{{ request.state.user.name }}</span>

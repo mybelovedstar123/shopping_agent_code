@@ -1,0 +1,19 @@
+<p class="run-status status-{{ run.status }}" data-status="{{ run.status }}">{{ status_labels.get(run.status, run.status) }}</p>
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+{% if run.finished and run.result %}
+  {% if run.status == "purchased" %}
+  <p class="success">Your order is placed.{% if run.result.order_id %} <a href="/orders/{{ run.result.order_id }}">See the order</a>.{% endif %}</p>
+  {% else %}
+  <p>{{ run.result.reason }}</p>
+  {% endif %}
+{% endif %}
+<h2>What the agents did</h2>
+{% if run.events %}
+<ol class="activity">
+  {% for event in run.events %}
+  <li class="{{ 'error' if event.type == 'failure' }}"><span class="agent">{{ event.agent }}</span> {{ event.text }}</li>
+  {% endfor %}
+</ol>
+{% else %}
+<p class="empty">Starting up.</p>
+{% endif %}
