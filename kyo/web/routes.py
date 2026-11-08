@@ -453,3 +453,15 @@ def decide_purchase(
         return redirect(f"/assistant/{run_id}")
     with transaction(sessions) as session:
         return _run_with_error(request, session, user, run_id, status, message)
+
+
+@router.get("/assistant/{run_id}/timeline", response_model=None)
+def run_timeline(request: Request, run_id: int, session: Db) -> HTMLResponse | RedirectResponse:
+    """Everything a run did, for working out why it did it."""
+    user = request.state.user
+    if not user:
+        return login_first(request)
+    run = runs.get_run(session, user.id, run_id)
+    if run is None:
+        return not_found(request, "We could not find that request.")
+    return render(request, "timeline.html", run=run, status_labels=STATUS_LABELS)

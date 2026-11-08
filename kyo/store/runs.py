@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from collections.abc import Callable
@@ -10,6 +11,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from ..logs import log, scrub
 from ..models.base import Model
 from ..runtime.trace import Trace
 from ..team import run_team
@@ -83,7 +85,7 @@ class RunManager:
             return len(stuck)
 
     def start(self, user_id: int, request: str) -> int:
-        request = request.strip()
+        request = scrub(request).strip()
         if not request:
             raise RunError("Tell the assistant what you would like to buy.")
         if len(request) > MAX_REQUEST_LENGTH:
@@ -102,6 +104,7 @@ class RunManager:
             session.add(run)
             session.flush()
             run_id = run.id
+        log.info("run started", extra={"run_id": run_id, "user_id": user_id})
         thread = threading.Thread(
             target=self._execute, args=(run_id, user_id, request), name=f"run-{run_id}", daemon=True
         )
@@ -126,9 +129,19 @@ class RunManager:
         except Exception as error:  # a failed run is reported to its shopper, not raised
             result = {"reason": f"{type(error).__name__}: {error}"[:300]}
             status = "failed"
+            log.exception("run failed", extra={"run_id": run_id, "user_id": user_id})
         with transaction(self.sessions) as session:
             run = session.get(AgentRun, run_id)
             self._close(session, run, status, result)
+        log.info(
+            "run finished",
+            extra={
+                "run_id": run_id,
+                "status": status,
+                "steps": result.get("steps"),
+                "model_review": result.get("model_review"),
+            },
+        )
 
     def _close(self, session: Session, run: AgentRun, status: str, result: dict[str, Any]) -> None:
         run.status = status
@@ -143,7 +156,8 @@ class RunManager:
     def _store_event(self, run_id: int, event: dict[str, Any]) -> None:
         if event["type"] not in SHOWN_EVENT_TYPES:
             return
-        text = str(event.get("text") or event.get("error") or "")[:MAX_EVENT_TEXT]
+        text = scrub(event.get("text") or event.get("error") or "")[:MAX_EVENT_TEXT]
+        args = scrub(json.dumps(event["args"]))[:MAX_EVENT_TEXT] if event.get("args") else ""
         with transaction(self.sessions) as session:
             session.add(
                 AgentEvent(
@@ -151,7 +165,7 @@ class RunManager:
                     seq=event["seq"],
                     type=event["type"],
                     agent=event["agent"],
-                    data={"text": text},
+                    data={"text": text, "args": args},
                 )
             )
 
@@ -222,7 +236,13 @@ def run_view(run: AgentRun, since: int = 0) -> dict[str, Any]:
         "created_at": run.created_at.isoformat(timespec="seconds"),
         "finished": run.status not in ACTIVE,
         "events": [
-            {"seq": e.seq, "type": e.type, "agent": e.agent, "text": e.data.get("text", "")}
+            {
+                "seq": e.seq,
+                "type": e.type,
+                "agent": e.agent,
+                "text": e.data.get("text", ""),
+                "args": e.data.get("args", ""),
+            }
             for e in run.events
             if e.seq > since
         ],
@@ -268,7 +288,7 @@ def answer_question(
     question = _open_question(session, user_id, run_id, question_id, "question")
     if not answer.strip():
         raise RunError("Type an answer first.")
-    question.answer = answer.strip()[:MAX_REQUEST_LENGTH]
+    question.answer = scrub(answer).strip()[:MAX_REQUEST_LENGTH]
     question.answered_at = now()
 
 

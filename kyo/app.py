@@ -15,6 +15,7 @@ from .api.cart import router as cart_router
 from .api.catalog import router as catalog_router
 from .api.orders import router as orders_router
 from .api.runs import router as runs_router
+from .logs import configure_logging, log_requests
 from .models.http import model_from_env
 from .store.db import make_engine, make_sessions
 from .store.models import Base
@@ -38,6 +39,7 @@ class Settings:
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
+    configure_logging()
     engine = make_engine(settings.database_url)
     Base.metadata.create_all(engine)
     app = FastAPI(title="Kyo Shop", version=__version__)
@@ -53,6 +55,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.runs.recover()
     app.state.login_throttle = LoginThrottle()
     app.middleware("http")(protect_responses)
+    app.middleware("http")(log_requests)
     app.include_router(catalog_router, prefix="/api")
     app.include_router(accounts_router, prefix="/api")
     app.include_router(cart_router, prefix="/api")

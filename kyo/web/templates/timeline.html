@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Timeline - Kyo Shop{% endblock %}
+{% block content %}
+<p><a href="/assistant/{{ run.id }}">Back to the request</a></p>
+<h1>Run timeline</h1>
+<dl class="facts">
+  <dt>Request</dt><dd>{{ run.request }}</dd>
+  <dt>Status</dt><dd>{{ status_labels.get(run.status, run.status) }}</dd>
+  <dt>Started</dt><dd>{{ run.created_at }} UTC</dd>
+  {% if run.result %}
+  <dt>Store steps used</dt><dd>{{ run.result.steps|default("not recorded") }}</dd>
+  <dt>Model review</dt><dd>{{ run.result.model_review|default("none") }}</dd>
+  <dt>Reason</dt><dd>{{ run.result.reason }}</dd>
+  {% if run.result.unverified %}<dt>Not checked</dt><dd>{{ run.result.unverified|join("; ") }}</dd>{% endif %}
+  {% endif %}
+</dl>
+<table class="lines timeline">
+  <thead>
+    <tr><th scope="col">#</th><th scope="col">Agent</th><th scope="col">What happened</th></tr>
+  </thead>
+  <tbody>
+    {% for event in run.events %}
+    <tr class="{{ 'error' if event.type == 'failure' }}">
+      <td class="number">{{ event.seq }}</td>
+      <td>{{ event.agent }}</td>
+      <td>{{ event.text }}{% if event.args %} <code>{{ event.args }}</code>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
