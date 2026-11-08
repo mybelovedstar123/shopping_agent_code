@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Kyo Shop{% endblock %}</title>
+  <link rel="stylesheet" href="/static/site.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/">Kyo Shop</a>
+    <form class="site-search" action="/search" method="get" role="search">
+      <label class="visually-hidden" for="site-q">Search products</label>
+      <input id="site-q" type="search" name="q" placeholder="Search products" value="{{ q|default('') }}">
+      <button type="submit">Search</button>
+    </form>
+    <nav class="site-nav" aria-label="Main">
+      {% block nav %}{% endblock %}
+    </nav>
+  </header>
+  <main class="page">
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="site-footer">
+    <p>A demonstration store. Payments are simulated, and no real money moves.</p>
+  </footer>
+</body>
+</html>

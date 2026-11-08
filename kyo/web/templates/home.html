@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="intro">
+  <h1>Find what you need</h1>
+  <p>Browse the store yourself.</p>
+</section>
+<section aria-labelledby="categories-heading">
+  <h2 id="categories-heading">Categories</h2>
+  <ul class="category-grid">
+    {% for category in categories %}
+    <li><a class="category-card" href="/category/{{ category.slug }}">{{ category.name }}</a></li>
+    {% endfor %}
+  </ul>
+</section>
+{% endblock %}
