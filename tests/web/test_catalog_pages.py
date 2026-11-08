@@ -48,8 +48,3 @@ def test_category_page_pages_through_products(client):
 def test_unknown_category_gives_a_helpful_404(client):
     reply = client.get("/category/nope")
     assert reply.status_code == 404 and "could not find that category" in reply.text
-
-
-def _later_test_page_text_is_escaped(client):
-    reply = client.get("/search", params={"q": "<script>alert(1)</script>"})
-    assert "<script>alert(1)</script>" not in reply.text
