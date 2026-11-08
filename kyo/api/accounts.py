@@ -32,21 +32,28 @@ def _public(user: User) -> dict[str, Any]:
 
 
 @router.post("/register", status_code=201)
-def register(body: Registration, response: Response, session: Db) -> dict[str, Any]:
+def register(
+    body: Registration, request: Request, response: Response, session: Db
+) -> dict[str, Any]:
     try:
         user = accounts.register(session, body.email, body.name, body.password)
     except accounts.AccountError as error:
         raise HTTPException(422, str(error)) from None
-    set_login_cookie(response, accounts.start_session(session, user))
+    set_login_cookie(request, response, accounts.start_session(session, user))
     return _public(user)
 
 
 @router.post("/login")
-def login(body: Credentials, response: Response, session: Db) -> dict[str, Any]:
+def login(body: Credentials, request: Request, response: Response, session: Db) -> dict[str, Any]:
+    throttle = request.app.state.login_throttle
+    if throttle.locked(request, body.email):
+        raise HTTPException(429, "Too many failed attempts. Wait a few minutes and try again.")
     user = accounts.authenticate(session, body.email, body.password)
     if user is None:
+        throttle.failed(request, body.email)
         raise HTTPException(401, "Wrong email or password.")
-    set_login_cookie(response, accounts.start_session(session, user))
+    throttle.succeeded(request, body.email)
+    set_login_cookie(request, response, accounts.start_session(session, user))
     return _public(user)
 
 

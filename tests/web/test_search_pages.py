@@ -1,7 +1,7 @@
 import re
 
-from conftest import text_of
 from sqlalchemy import select
+from webutil import text_of
 
 from kyo.store.db import transaction
 from kyo.store.models import Product

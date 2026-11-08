@@ -20,7 +20,7 @@
       <a href="/cart">Cart</a>
       <a href="/orders">Orders</a>
       <span class="who">{{ request.state.user.name }}</span>
-      <form action="/logout" method="post"><button class="link" type="submit">Log out</button></form>
+      <form action="/logout" method="post"><input type="hidden" name="csrf_token" value="{{ request.state.csrf_token }}"><button class="link" type="submit">Log out</button></form>
       {% else %}
       <a href="/login">Log in</a>
       <a href="/register">Create account</a>

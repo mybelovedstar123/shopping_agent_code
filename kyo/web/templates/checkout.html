@@ -10,7 +10,7 @@
     {% endfor %}
   </ul>
   <p class="total">Total: {{ "$%.2f"|format(cart.total) }}</p>
-  <form class="stacked" action="/checkout" method="post">
+  <form class="stacked" action="/checkout" method="post"><input type="hidden" name="csrf_token" value="{{ request.state.csrf_token }}">
     <input type="hidden" name="checkout_key" value="{{ checkout_key }}">
     <label>Card number
       <input type="text" name="card_number" inputmode="numeric" autocomplete="off" required>

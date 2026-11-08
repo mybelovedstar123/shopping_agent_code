@@ -12,7 +12,7 @@
   <section class="ask" aria-label="A question for you">
     <h2>A question for you</h2>
     <p>{{ question.text }}</p>
-    <form class="stacked" action="/assistant/{{ run.id }}/questions/{{ question.id }}/answer" method="post">
+    <form class="stacked" action="/assistant/{{ run.id }}/questions/{{ question.id }}/answer" method="post"><input type="hidden" name="csrf_token" value="{{ request.state.csrf_token }}">
       <label class="visually-hidden" for="answer-{{ question.id }}">Your answer</label>
       <input id="answer-{{ question.id }}" type="text" name="answer" autocomplete="off" required>
       <button type="submit">Answer</button>
@@ -28,7 +28,7 @@
       {% endfor %}
     </ul>
     <p class="total">Total: {{ "$%.2f"|format(question.total) }}</p>
-    <form class="stacked" action="/assistant/{{ run.id }}/questions/{{ question.id }}/decision" method="post">
+    <form class="stacked" action="/assistant/{{ run.id }}/questions/{{ question.id }}/decision" method="post"><input type="hidden" name="csrf_token" value="{{ request.state.csrf_token }}">
       <input type="hidden" name="approved" value="yes">
       <label>Card number
         <input type="text" name="card_number" inputmode="numeric" autocomplete="off" required>
@@ -36,7 +36,7 @@
       <p class="hint">This store is a simulation. Use the test card 4242 4242 4242 4242. The agents never see this number.</p>
       <button type="submit">Approve and pay {{ "$%.2f"|format(question.total) }}</button>
     </form>
-    <form class="inline" action="/assistant/{{ run.id }}/questions/{{ question.id }}/decision" method="post">
+    <form class="inline" action="/assistant/{{ run.id }}/questions/{{ question.id }}/decision" method="post"><input type="hidden" name="csrf_token" value="{{ request.state.csrf_token }}">
       <input type="hidden" name="approved" value="no">
       <button class="secondary" type="submit">Do not buy</button>
     </form>

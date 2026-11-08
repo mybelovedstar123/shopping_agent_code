@@ -5,7 +5,7 @@
   <h1>Your shopping assistant</h1>
   <p>Say what you want, and a team of agents will search, compare and fill a cart. They will ask before buying anything.</p>
   {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
-  <form class="stacked" action="/assistant" method="post">
+  <form class="stacked" action="/assistant" method="post"><input type="hidden" name="csrf_token" value="{{ request.state.csrf_token }}">
     <label for="request">What would you like?</label>
     <textarea id="request" name="request" rows="3" maxlength="2000" required placeholder="Buy the cheapest red mug with a capacity of at least 300 ml, under $20.">{{ request_text }}</textarea>
     <button type="submit">Start shopping</button>
