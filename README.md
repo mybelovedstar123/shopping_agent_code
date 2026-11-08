@@ -23,8 +23,27 @@ independent agents inside a complete, self-contained shopping application. See t
 [roadmap](docs/ROADMAP.md) for the plan and schedule, and the
 [architecture](docs/ARCHITECTURE.md) for the design.
 
-The agent team now shops end to end. The store and web application are still to come, so
-most of this README still describes `agent.py`, the single agent the team grew from.
+The agent team now shops end to end in a real store with a JSON API. The web pages are still
+to come, and most of this README still describes `agent.py`, the single agent the team grew
+from.
+
+## The store
+
+```bash
+pip install -e .
+python -m kyo.store.seed                       # 144 products in 9 categories
+uvicorn --factory kyo.app:create_app           # API docs at http://127.0.0.1:8000/docs
+```
+
+The store has accounts, a catalog with search and filters, carts, orders and simulated
+payments. No real money moves: any Luhn-valid card number is approved except
+`4000 0000 0000 0002`, which is declined. Card numbers are never stored.
+
+`POST /api/runs` hands a request to the agent team. Each run works in its own cart, separate
+from the shopper's, and it cannot complete a purchase alone: checkout waits for the shopper to
+approve the exact cart and total, and that approval places the order.
+
+Set `KYO_DATABASE_URL` to use another database. The default is a local SQLite file.
 
 ## The agent team
 
@@ -69,6 +88,7 @@ with no model at all, using rules. Set `KYO_MODEL_BASE_URL`, `KYO_MODEL_NAME` an
 ## Contents
 
 - [Project status](#project-status)
+- [The store](#the-store)
 - [The agent team](#the-agent-team)
 - [Architecture](#architecture)
 - [How an episode runs](#how-an-episode-runs)
