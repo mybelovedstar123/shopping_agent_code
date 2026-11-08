@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Your orders - Kyo Shop{% endblock %}
+{% block content %}
+<h1>Your orders</h1>
+{% if orders %}
+<ul class="order-list">
+  {% for order in orders %}
+  <li>
+    <a href="/orders/{{ order.id }}">Order {{ order.id }}</a>
+    <span>{{ order.created_at[:10] }}</span>
+    <span class="number">{{ "$%.2f"|format(order.total) }}</span>
+    {% if order.from_assistant %}<span class="tag">Assistant</span>{% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="empty">You have no orders yet.</p>
+{% endif %}
+{% endblock %}

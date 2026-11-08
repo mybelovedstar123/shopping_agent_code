@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Order {{ order.id }} - Kyo Shop{% endblock %}
+{% block content %}
+<h1>Order {{ order.id }}</h1>
+{% if placed %}<p class="success" role="status">Thank you. Your order is placed.</p>{% endif %}
+<p>Placed {{ order.created_at[:10] }}, paid with the simulated card ending {{ order.card_last4 }}.{% if order.from_assistant %} Bought by your assistant, with your approval.{% endif %}</p>
+<table class="lines">
+  <thead>
+    <tr><th scope="col">Product</th><th scope="col">Price</th><th scope="col">Quantity</th><th scope="col">Subtotal</th></tr>
+  </thead>
+  <tbody>
+    {% for line in order.lines %}
+    <tr>
+      <td><a href="/product/{{ line.id }}">{{ line.title }}</a></td>
+      <td class="number">{{ "$%.2f"|format(line.price) }}</td>
+      <td>{{ line.quantity }}</td>
+      <td class="number">{{ "$%.2f"|format(line.subtotal) }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+  <tfoot>
+    <tr><th scope="row" colspan="3">Total</th><td class="number total">{{ "$%.2f"|format(order.total) }}</td></tr>
+  </tfoot>
+</table>
+<p><a href="/orders">All orders</a></p>
+{% endblock %}

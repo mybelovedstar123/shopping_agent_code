@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Your cart - Kyo Shop{% endblock %}
+{% block content %}
+<h1>Your cart</h1>
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+{% if cart.lines %}
+<table class="lines">
+  <thead>
+    <tr><th scope="col">Product</th><th scope="col">Price</th><th scope="col">Quantity</th><th scope="col">Subtotal</th></tr>
+  </thead>
+  <tbody>
+    {% for line in cart.lines %}
+    <tr>
+      <td><a href="/product/{{ line.id }}">{{ line.title }}</a></td>
+      <td class="number">{{ "$%.2f"|format(line.price) }}</td>
+      <td>
+        <form class="inline" action="/cart/{{ line.id }}" method="post">
+          <label class="visually-hidden" for="qty-{{ line.id }}">Quantity of {{ line.title }}</label>
+          <input id="qty-{{ line.id }}" class="quantity" type="number" name="quantity" min="0" max="{{ line.stock }}" value="{{ line.quantity }}">
+          <button class="secondary" type="submit">Update</button>
+        </form>
+        <form class="inline" action="/cart/{{ line.id }}" method="post">
+          <input type="hidden" name="quantity" value="0">
+          <button class="link" type="submit" aria-label="Remove {{ line.title }}">Remove</button>
+        </form>
+      </td>
+      <td class="number">{{ "$%.2f"|format(line.subtotal) }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+  <tfoot>
+    <tr><th scope="row" colspan="3">Total</th><td class="number total">{{ "$%.2f"|format(cart.total) }}</td></tr>
+  </tfoot>
+</table>
+<p><a class="button" href="/checkout">Check out</a></p>
+{% else %}
+<p class="empty">Your cart is empty. <a href="/search">Browse products</a>.</p>
+{% endif %}
+{% endblock %}
