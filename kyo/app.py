@@ -5,20 +5,24 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from fastapi import FastAPI
-from sqlalchemy.orm import Session, sessionmaker
 
 from . import __version__
 from .api.accounts import router as accounts_router
 from .api.cart import router as cart_router
 from .api.catalog import router as catalog_router
 from .api.orders import router as orders_router
+from .api.runs import router as runs_router
+from .models.http import model_from_env
 from .store.db import make_engine, make_sessions
 from .store.models import Base
+from .store.runs import RunManager
 
 
 @dataclass
 class Settings:
     database_url: str | None = None
+    question_timeout: float = 900.0
+    poll_seconds: float = 0.25
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -29,17 +33,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.engine = engine
     app.state.sessions = make_sessions(engine)
+    app.state.runs = RunManager(
+        app.state.sessions,
+        model_factory=model_from_env,
+        question_timeout=settings.question_timeout,
+        poll_seconds=settings.poll_seconds,
+    )
+    app.state.runs.recover()
     app.include_router(catalog_router, prefix="/api")
     app.include_router(accounts_router, prefix="/api")
     app.include_router(cart_router, prefix="/api")
     app.include_router(orders_router, prefix="/api")
+    app.include_router(runs_router, prefix="/api")
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
     return app
-
-
-def sessions_of(app: FastAPI) -> sessionmaker[Session]:
-    return app.state.sessions
