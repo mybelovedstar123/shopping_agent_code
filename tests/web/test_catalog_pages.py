@@ -1,6 +1,6 @@
 import re
 
-from conftest import text_of
+from webutil import text_of
 
 
 def test_home_lists_every_category(client):

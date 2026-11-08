@@ -1,6 +1,3 @@
-import html
-import re
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -26,19 +23,3 @@ def app(tmp_path):
 @pytest.fixture
 def client(app):
     return TestClient(app, follow_redirects=True)
-
-
-def text_of(response):
-    """The visible text of a page, for checking what a shopper would read."""
-    body = re.sub(r"<(script|style).*?</\1>", " ", response.text, flags=re.S)
-    return html.unescape(" ".join(re.sub(r"<[^>]+>", " ", body).split()))
-
-
-def post_form(client, url, data, follow=True):
-    """Submit a form the way a browser does."""
-    return client.post(url, data=data, follow_redirects=follow)
-
-
-def register(client, follow=True, email="shopper@example.com"):
-    data = {"name": "Shopper", "email": email, "password": "a long password"}
-    return post_form(client, "/register", data, follow)

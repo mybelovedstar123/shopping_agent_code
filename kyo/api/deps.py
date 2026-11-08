@@ -21,13 +21,14 @@ def db(request: Request) -> Iterator[Session]:
         yield session
 
 
-def set_login_cookie(response: Response, token: str) -> None:
+def set_login_cookie(request: Request, response: Response, token: str) -> None:
     response.set_cookie(
         COOKIE,
         token,
         max_age=int(accounts.SESSION_LIFETIME.total_seconds()),
         httponly=True,
         samesite="lax",
+        secure=request.app.state.settings.secure_cookies,
     )
 
 

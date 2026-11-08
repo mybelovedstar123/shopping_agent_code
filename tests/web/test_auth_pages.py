@@ -1,5 +1,5 @@
 import pytest
-from conftest import post_form, register, text_of
+from webutil import post_form, register, text_of
 
 from kyo.store.db import transaction
 from kyo.store.models import User

@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from ..api.deps import COOKIE, db, set_login_cookie
 from ..store import accounts, cart, catalog, checkout, payments, runs
 from ..store.db import transaction
+from .security import TOO_MANY_LOGINS, verify_csrf
 
 HERE = Path(__file__).parent
 STATIC_DIR = HERE / "static"
@@ -27,7 +28,9 @@ def load_user(request: Request, session: Annotated[Session, Depends(db)]) -> Non
 
 
 router = APIRouter(
-    include_in_schema=False, default_response_class=HTMLResponse, dependencies=[Depends(load_user)]
+    include_in_schema=False,
+    default_response_class=HTMLResponse,
+    dependencies=[Depends(verify_csrf), Depends(load_user)],
 )
 Db = Annotated[Session, Depends(db)]
 PAGE_SIZE = 12
@@ -166,8 +169,14 @@ def login(
     password: Annotated[str, Form()] = "",
     next: Annotated[str, Form()] = "/",
 ) -> HTMLResponse | RedirectResponse:
+    throttle = request.app.state.login_throttle
+    if throttle.locked(request, email):
+        return render(
+            request, "login.html", 429, next=safe_next(next), email=email, error=TOO_MANY_LOGINS
+        )
     user = accounts.authenticate(session, email, password)
     if user is None:
+        throttle.failed(request, email)
         return render(
             request,
             "login.html",
@@ -176,8 +185,9 @@ def login(
             email=email,
             error="Wrong email or password.",
         )
+    throttle.succeeded(request, email)
     response = redirect(safe_next(next))
-    set_login_cookie(response, accounts.start_session(session, user))
+    set_login_cookie(request, response, accounts.start_session(session, user))
     return response
 
 
@@ -210,7 +220,7 @@ def register(
             error=str(error),
         )
     response = redirect(safe_next(next))
-    set_login_cookie(response, accounts.start_session(session, user))
+    set_login_cookie(request, response, accounts.start_session(session, user))
     return response
 
 

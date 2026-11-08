@@ -3,9 +3,9 @@
 import re
 import time
 
-from conftest import post_form, register, text_of
 from fastapi.testclient import TestClient
 from sqlalchemy import select
+from webutil import post_form, register, text_of
 
 from kyo.store import payments
 from kyo.store.db import transaction

@@ -2,8 +2,8 @@
 
 import re
 
-from conftest import post_form, register, text_of
 from sqlalchemy import select
+from webutil import post_form, register, text_of
 
 from kyo.store import payments
 from kyo.store.db import transaction

@@ -9,7 +9,7 @@
   <p class="price price-large">{{ "$%.2f"|format(product.price) }}</p>
   {% if product.stock > 0 %}
   <p class="success">{{ product.stock }} in stock</p>
-  <form class="add-to-cart" action="/cart/{{ product.id }}" method="post">
+  <form class="add-to-cart" action="/cart/{{ product.id }}" method="post"><input type="hidden" name="csrf_token" value="{{ request.state.csrf_token }}">
     <label>Quantity
       <input class="quantity" type="number" name="quantity" min="1" max="{{ product.stock }}" value="1">
     </label>

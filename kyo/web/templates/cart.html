@@ -14,12 +14,12 @@
       <td><a href="/product/{{ line.id }}">{{ line.title }}</a></td>
       <td class="number">{{ "$%.2f"|format(line.price) }}</td>
       <td>
-        <form class="inline" action="/cart/{{ line.id }}" method="post">
+        <form class="inline" action="/cart/{{ line.id }}" method="post"><input type="hidden" name="csrf_token" value="{{ request.state.csrf_token }}">
           <label class="visually-hidden" for="qty-{{ line.id }}">Quantity of {{ line.title }}</label>
           <input id="qty-{{ line.id }}" class="quantity" type="number" name="quantity" min="0" max="{{ line.stock }}" value="{{ line.quantity }}">
           <button class="secondary" type="submit">Update</button>
         </form>
-        <form class="inline" action="/cart/{{ line.id }}" method="post">
+        <form class="inline" action="/cart/{{ line.id }}" method="post"><input type="hidden" name="csrf_token" value="{{ request.state.csrf_token }}">
           <input type="hidden" name="quantity" value="0">
           <button class="link" type="submit" aria-label="Remove {{ line.title }}">Remove</button>
         </form>
