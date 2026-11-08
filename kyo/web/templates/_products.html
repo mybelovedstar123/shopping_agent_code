@@ -1,0 +1,13 @@
+{% if products %}
+<ul class="product-grid">
+  {% for product in products %}
+  <li class="product-card">
+    <a href="/product/{{ product.id }}">{{ product.title }}</a>
+    <p class="price">{{ "$%.2f"|format(product.price) }}</p>
+    {% if not product.in_stock %}<p class="stock-out">Out of stock</p>{% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="empty">No products match.</p>
+{% endif %}

@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "A team of independent shopping agents and the store they shop in"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["sqlalchemy>=2.0", "fastapi>=0.110", "uvicorn>=0.30"]
+dependencies = ["sqlalchemy>=2.0", "fastapi>=0.110", "uvicorn>=0.30", "jinja2>=3.1"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.13", "httpx>=0.27"]
@@ -27,3 +27,6 @@ extend-exclude = ["agent.py"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
 ignore = ["E501"]  # ruff format handles code; long regexes stay on one line
+
+[tool.setuptools.package-data]
+"kyo.web" = ["templates/*.html", "static/*"]

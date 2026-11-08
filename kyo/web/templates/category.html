@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}{{ category.name }} - Kyo Shop{% endblock %}
+{% block content %}
+<h1>{{ category.name }}</h1>
+<p class="count">{{ found.total }} product{{ "" if found.total == 1 else "s" }}</p>
+{% include "_products.html" %}
+{% if found.next_page or found.page > 1 %}
+<nav class="pager" aria-label="Pages">
+  {% if found.page > 1 %}<a href="?page={{ found.page - 1 }}">Previous</a>{% endif %}
+  <span>Page {{ found.page }}</span>
+  {% if found.next_page %}<a href="?page={{ found.next_page }}">Next</a>{% endif %}
+</nav>
+{% endif %}
+{% endblock %}
