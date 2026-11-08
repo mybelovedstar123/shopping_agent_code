@@ -9,6 +9,12 @@
   <p class="price price-large">{{ "$%.2f"|format(product.price) }}</p>
   {% if product.stock > 0 %}
   <p class="success">{{ product.stock }} in stock</p>
+  <form class="add-to-cart" action="/cart/{{ product.id }}" method="post">
+    <label>Quantity
+      <input class="quantity" type="number" name="quantity" min="1" max="{{ product.stock }}" value="1">
+    </label>
+    <button type="submit">Add to cart</button>
+  </form>
   {% else %}
   <p class="stock-out">Out of stock</p>
   {% endif %}
