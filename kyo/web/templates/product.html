@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}{{ product.title }} - Kyo Shop{% endblock %}
+{% block content %}
+<nav class="crumbs" aria-label="Breadcrumb">
+  <a href="/category/{{ category_slug }}">{{ product.category }}</a>
+</nav>
+<article class="product">
+  <h1>{{ product.title }}</h1>
+  <p class="price price-large">{{ "$%.2f"|format(product.price) }}</p>
+  {% if product.stock > 0 %}
+  <p class="success">{{ product.stock }} in stock</p>
+  {% else %}
+  <p class="stock-out">Out of stock</p>
+  {% endif %}
+  <p>{{ product.description }}</p>
+  <h2>Details</h2>
+  <table class="attributes">
+    <tbody>
+      {% for key, value in product.attributes.items() %}
+      <tr><th scope="row">{{ key|capitalize }}</th><td>{{ value }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</article>
+{% endblock %}

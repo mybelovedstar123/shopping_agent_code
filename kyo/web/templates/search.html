@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Search - Kyo Shop{% endblock %}
+{% block content %}
+<h1>{% if q %}Results for &ldquo;{{ q }}&rdquo;{% else %}All products{% endif %}</h1>
+<div class="search-layout">
+  <form class="filters" action="/search" method="get" aria-label="Filter results">
+    <input type="hidden" name="q" value="{{ q }}">
+    <label>Category
+      <select name="category">
+        <option value="">All categories</option>
+        {% for c in categories %}
+        <option value="{{ c.slug }}" {{ "selected" if c.slug == category }}>{{ c.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Lowest price <input type="number" name="min_price" min="0" step="0.01" value="{{ min_price if min_price is not none }}"></label>
+    <label>Highest price <input type="number" name="max_price" min="0" step="0.01" value="{{ max_price if max_price is not none }}"></label>
+    {% for name, values in facets.items() %}
+    <label>{{ name|capitalize }}
+      <select name="{{ name }}">
+        <option value="">Any</option>
+        {% for v in values %}
+        <option value="{{ v.value }}" {{ "selected" if attributes.get(name) == v.value }}>{{ v.value }} ({{ v.count }})</option>
+        {% endfor %}
+      </select>
+    </label>
+    {% endfor %}
+    <label class="checkbox"><input type="checkbox" name="in_stock" value="true" {{ "checked" if in_stock }}> In stock only</label>
+    <label>Sort by
+      <select name="sort">
+        {% for value, label in sorts %}
+        <option value="{{ value }}" {{ "selected" if value == sort }}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit">Apply</button>
+  </form>
+  <section aria-label="Results">
+    <p class="count">{{ found.total }} product{{ "" if found.total == 1 else "s" }}</p>
+    {% include "_products.html" %}
+    {% if found.next_page or found.page > 1 %}
+    <nav class="pager" aria-label="Pages">
+      {% if found.page > 1 %}<a href="?{{ page_query }}&amp;page={{ found.page - 1 }}">Previous</a>{% endif %}
+      <span>Page {{ found.page }}</span>
+      {% if found.next_page %}<a href="?{{ page_query }}&amp;page={{ found.next_page }}">Next</a>{% endif %}
+    </nav>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}
