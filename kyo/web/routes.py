@@ -389,3 +389,57 @@ def run_fragment(request: Request, run_id: int, session: Db) -> HTMLResponse:
     response = render(request, "_run.html", run=run, status_labels=STATUS_LABELS, error=None)
     response.headers["X-Run-Finished"] = "true" if run["finished"] else "false"
     return response
+
+
+def _run_with_error(request, session, user, run_id, status, error) -> HTMLResponse:
+    run = runs.get_run(session, user.id, run_id)
+    return render(request, "run.html", status, run=run, status_labels=STATUS_LABELS, error=error)
+
+
+@router.post("/assistant/{run_id}/questions/{question_id}/answer", response_model=None)
+def answer_question(
+    request: Request,
+    run_id: int,
+    question_id: int,
+    session: Db,
+    answer: Annotated[str, Form()] = "",
+) -> HTMLResponse | RedirectResponse:
+    user = request.state.user
+    if not user:
+        return login_first(request)
+    if not answer.strip():
+        return _run_with_error(request, session, user, run_id, 422, "Type an answer first.")
+    try:
+        runs.answer_question(session, user.id, run_id, question_id, answer)
+    except LookupError:
+        return not_found(request, "We could not find that question.")
+    except runs.RunError as error:
+        return _run_with_error(request, session, user, run_id, 409, str(error))
+    return redirect(f"/assistant/{run_id}")
+
+
+@router.post("/assistant/{run_id}/questions/{question_id}/decision", response_model=None)
+def decide_purchase(
+    request: Request,
+    run_id: int,
+    question_id: int,
+    approved: Annotated[str, Form()] = "no",
+    card_number: Annotated[str, Form()] = "",
+) -> HTMLResponse | RedirectResponse:
+    """The shopper's decision. Approving charges the card here, never inside an agent."""
+    user = request.state.user
+    if not user:
+        return login_first(request)
+    sessions = request.app.state.sessions
+    try:
+        runs.decide_approval(sessions, user.id, run_id, question_id, approved == "yes", card_number)
+    except LookupError:
+        return not_found(request, "We could not find that question.")
+    except payments.PaymentDeclined as error:
+        status, message = 402, str(error)
+    except runs.RunError as error:
+        status, message = 409, str(error)
+    else:
+        return redirect(f"/assistant/{run_id}")
+    with transaction(sessions) as session:
+        return _run_with_error(request, session, user, run_id, status, message)

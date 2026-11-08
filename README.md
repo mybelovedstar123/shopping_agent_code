@@ -23,25 +23,26 @@ independent agents inside a complete, self-contained shopping application. See t
 [roadmap](docs/ROADMAP.md) for the plan and schedule, and the
 [architecture](docs/ARCHITECTURE.md) for the design.
 
-The agent team now shops end to end in a real store with a JSON API. The web pages are still
-to come, and most of this README still describes `agent.py`, the single agent the team grew
-from.
+The shopping application now works end to end, in the browser and through a JSON API. Later
+sections of this README still describe `agent.py`, the single agent the team grew from.
 
 ## The store
 
 ```bash
 pip install -e .
 python -m kyo.store.seed                       # 144 products in 9 categories
-uvicorn --factory kyo.app:create_app           # API docs at http://127.0.0.1:8000/docs
+uvicorn --factory kyo.app:create_app           # http://127.0.0.1:8000, API docs at /docs
 ```
 
-The store has accounts, a catalog with search and filters, carts, orders and simulated
-payments. No real money moves: any Luhn-valid card number is approved except
-`4000 0000 0000 0002`, which is declined. Card numbers are never stored.
+Shoppers can browse and search, create an account, fill a cart, and check out. No real money
+moves: any Luhn-valid card number is approved except `4000 0000 0000 0002`, which is declined,
+and card numbers are never stored.
 
-`POST /api/runs` hands a request to the agent team. Each run works in its own cart, separate
-from the shopper's, and it cannot complete a purchase alone: checkout waits for the shopper to
-approve the exact cart and total, and that approval places the order.
+On the **Assistant** page, a shopper describes what they want and a team of agents shops for
+them, with each agent's progress on the page. The agents may ask questions, and they cannot
+complete a purchase alone: each run works in its own cart, and checkout waits for the shopper
+to approve the exact cart and total. The shopper's approval places the order, so the agents
+never see the card number. The same flow is available through `POST /api/runs`.
 
 Set `KYO_DATABASE_URL` to use another database. The default is a local SQLite file.
 
