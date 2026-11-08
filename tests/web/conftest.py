@@ -1,3 +1,4 @@
+import html
 import re
 
 import pytest
@@ -30,7 +31,7 @@ def client(app):
 def text_of(response):
     """The visible text of a page, for checking what a shopper would read."""
     body = re.sub(r"<(script|style).*?</\1>", " ", response.text, flags=re.S)
-    return " ".join(re.sub(r"<[^>]+>", " ", body).split())
+    return html.unescape(" ".join(re.sub(r"<[^>]+>", " ", body).split()))
 
 
 def post_form(client, url, data, follow=True):

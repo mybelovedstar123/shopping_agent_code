@@ -155,3 +155,8 @@ textarea { width: 100%; }
 .activity { padding-left: 1.5rem; font-size: 0.9375rem; }
 .activity li { padding: 0.125rem 0; }
 .agent { display: inline-block; min-width: 5.5rem; font-weight: 600; color: var(--muted); }
+
+.ask { margin: 1rem 0; padding: 1rem; background: var(--surface); border: 1px solid var(--accent); border-radius: 8px; }
+.ask h2 { margin-top: 0; }
+.ask .inline { margin-top: 0.75rem; }
+.said { margin: 0.5rem 0; }
