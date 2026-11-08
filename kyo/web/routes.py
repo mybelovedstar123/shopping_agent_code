@@ -7,13 +7,13 @@ from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import quote, urlencode
 
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from ..api.deps import COOKIE, db, set_login_cookie
-from ..store import accounts, cart, catalog, checkout, payments
+from ..store import accounts, cart, catalog, checkout, payments, runs
 from ..store.db import transaction
 
 HERE = Path(__file__).parent
@@ -317,3 +317,75 @@ def order_page(
     if order is None:
         return not_found(request, "We could not find that order.")
     return render(request, "order.html", order=order, placed=bool(placed))
+
+
+STATUS_LABELS = {
+    "running": "Working on it",
+    "waiting": "Waiting for you",
+    "purchased": "Purchased",
+    "declined": "Did not buy",
+    "unfinished": "Could not finish",
+    "failed": "Something went wrong",
+}
+
+
+@router.get("/assistant", response_model=None)
+def assistant_page(request: Request, session: Db) -> HTMLResponse | RedirectResponse:
+    user = request.state.user
+    if not user:
+        return login_first(request)
+    return render(
+        request,
+        "assistant.html",
+        runs=runs.list_runs(session, user.id),
+        status_labels=STATUS_LABELS,
+        request_text="",
+        error=None,
+    )
+
+
+@router.post("/assistant", response_model=None)
+def start_assistant(
+    request: Request, session: Db, request_text: Annotated[str, Form(alias="request")] = ""
+) -> HTMLResponse | RedirectResponse:
+    user = request.state.user
+    if not user:
+        return login_first(request)
+    try:
+        run_id = request.app.state.runs.start(user.id, request_text)
+    except runs.RunError as error:
+        return render(
+            request,
+            "assistant.html",
+            422,
+            runs=runs.list_runs(session, user.id),
+            status_labels=STATUS_LABELS,
+            request_text=request_text,
+            error=str(error),
+        )
+    return redirect(f"/assistant/{run_id}")
+
+
+@router.get("/assistant/{run_id}", response_model=None)
+def run_page(request: Request, run_id: int, session: Db) -> HTMLResponse | RedirectResponse:
+    user = request.state.user
+    if not user:
+        return login_first(request)
+    run = runs.get_run(session, user.id, run_id)
+    if run is None:
+        return not_found(request, "We could not find that request.")
+    return render(request, "run.html", run=run, status_labels=STATUS_LABELS, error=None)
+
+
+@router.get("/assistant/{run_id}/live")
+def run_fragment(request: Request, run_id: int, session: Db) -> HTMLResponse:
+    """The changing part of a run's page, for its live updates."""
+    user = request.state.user
+    if not user:
+        raise HTTPException(401, "Log in first.")
+    run = runs.get_run(session, user.id, run_id)
+    if run is None:
+        raise HTTPException(404, "no such run")
+    response = render(request, "_run.html", run=run, status_labels=STATUS_LABELS, error=None)
+    response.headers["X-Run-Finished"] = "true" if run["finished"] else "false"
+    return response

@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Assistant - Kyo Shop{% endblock %}
+{% block content %}
+<div class="narrow-wide">
+  <h1>Your shopping assistant</h1>
+  <p>Say what you want, and a team of agents will search, compare and fill a cart. They will ask before buying anything.</p>
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <form class="stacked" action="/assistant" method="post">
+    <label for="request">What would you like?</label>
+    <textarea id="request" name="request" rows="3" maxlength="2000" required placeholder="Buy the cheapest red mug with a capacity of at least 300 ml, under $20.">{{ request_text }}</textarea>
+    <button type="submit">Start shopping</button>
+  </form>
+  {% if runs %}
+  <h2>Earlier requests</h2>
+  <ul class="run-list">
+    {% for run in runs %}
+    <li>
+      <a href="/assistant/{{ run.id }}">{{ run.request[:80] }}</a>
+      <span class="tag">{{ status_labels.get(run.status, run.status) }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>
+{% endblock %}
