@@ -2,7 +2,7 @@
 {% block title %}Assistant - Kyo Shop{% endblock %}
 {% block content %}
 <div class="narrow-wide">
-  <p><a href="/assistant">All requests</a></p>
+  <p><a href="/assistant">All requests</a> &middot; <a href="/assistant/{{ run.id }}/timeline">Full timeline</a></p>
   <h1>Your request</h1>
   <blockquote class="request">{{ run.request }}</blockquote>
   <div id="live-run" data-live-url="/assistant/{{ run.id }}/live" data-finished="{{ 'true' if run.finished else 'false' }}" aria-live="polite">

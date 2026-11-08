@@ -160,3 +160,8 @@ textarea { width: 100%; }
 .ask h2 { margin-top: 0; }
 .ask .inline { margin-top: 0.75rem; }
 .said { margin: 0.5rem 0; }
+
+.facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; }
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; }
+.timeline code { font-size: 0.8125rem; color: var(--muted); overflow-wrap: anywhere; }
