@@ -93,9 +93,7 @@ class Bus:
         answer: Future[Message] = Future()
         with self._lock:
             self._pending[message.id] = answer
-        self.trace.record(
-            "request", sender, to=recipient, kind=kind, payload=message.payload
-        )
+        self.trace.record("request", sender, to=recipient, kind=kind, payload=message.payload)
         self._mailboxes[recipient].put(message)
         try:
             reply = answer.result(timeout if timeout is not None else self.timeout)
