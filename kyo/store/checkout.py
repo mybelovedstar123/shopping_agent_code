@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session, selectinload
 from . import payments
 from .cart import _lines, clear
 from .catalog import to_dollars
-from .models import Order, OrderLine, Payment, Product
+from .models import Order, OrderLine, Payment, Product, User
 
 
 class CheckoutError(Exception):
@@ -34,6 +34,15 @@ def place_order(
     nothing is bought.
     """
     key = idempotency_key or secrets.token_hex(16)
+    # Take a write lock on this user before reading anything. Otherwise two checkouts could both
+    # read the same cart, and each buy it. The second now waits, then finds the first's order
+    # or an empty cart.
+    session.execute(
+        update(User)
+        .where(User.id == user_id)
+        .values(name=User.name)
+        .execution_options(synchronize_session=False)
+    )
     earlier = session.scalar(
         select(Order)
         .options(selectinload(Order.lines), selectinload(Order.payment))
