@@ -96,6 +96,7 @@ def search_page(request: Request, session: Db) -> HTMLResponse:
     min_price, max_price = _price(params.get("min_price")), _price(params.get("max_price"))
     in_stock = params.get("in_stock") == "true"
     facets = catalog.facets(session, category) if category else {}
+    category_row = catalog.category_by_slug(session, category) if category else None
     attributes = {k: params[k] for k in facets if params.get(k)}
     found = catalog.search(
         session,
@@ -115,6 +116,7 @@ def search_page(request: Request, session: Db) -> HTMLResponse:
         "search.html",
         q=q,
         category=category,
+        category_name=category_row.name if category_row else None,
         categories=catalog.categories(session),
         min_price=min_price,
         max_price=max_price,
