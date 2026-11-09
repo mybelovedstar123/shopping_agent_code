@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kyo-shop"
-version = "0.1.0"
+version = "1.0.0"
 description = "A team of independent shopping agents and the store they shop in"
 readme = "README.md"
 requires-python = ">=3.11"
