@@ -1,0 +1,18 @@
+services:
+  shop:
+    build: .
+    ports:
+      - "127.0.0.1:${KYO_PUBLISH_PORT:-8000}:8000"
+    environment:
+      # Set to 1 when serving over HTTPS.
+      KYO_SECURE_COOKIES: "${KYO_SECURE_COOKIES:-0}"
+      # Optional: add a model's judgement to the agents. Leave blank to use rules alone.
+      KYO_MODEL_BASE_URL: "${KYO_MODEL_BASE_URL:-}"
+      KYO_MODEL_NAME: "${KYO_MODEL_NAME:-}"
+      KYO_MODEL_API_KEY: "${KYO_MODEL_API_KEY:-}"
+    volumes:
+      - shop-data:/data
+    restart: unless-stopped
+
+volumes:
+  shop-data:
