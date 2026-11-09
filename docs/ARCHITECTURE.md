@@ -60,8 +60,8 @@ reaches into their state.
 The team replaces most of `Kyo`, but not all of it:
 
 - **Requirements that point at another listing** ("the same colour as the kettle Ovarno
-  sells") are not followed. They are returned in the result's `unverified` list and are not
-  checked by the rules. `trail` and `find_link` in `agent.py` have no equivalent yet.
+  sells") are not followed, because `trail` and `find_link` in `agent.py` have no equivalent
+  yet. The team declines such requests, since buying without checking would be worse.
 - **The conversational buying loop is gone.** `GUIDE` is unused: the coordinator's workflow
   chooses every step, and models only help with specific decisions. This makes runs
   predictable and testable, but a model cannot improvise around an unusual store.
