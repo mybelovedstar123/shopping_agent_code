@@ -201,3 +201,25 @@ def test_words_describing_another_listing_are_moved():
     brief, _, _ = read(ScriptedModel([data, {"describe_other": ["lid: glass"]}]))
     assert brief.items[0].musts == [f"{pointer} (that listing: lid: glass)", "size: 2 l"]
     assert brief.lookups == [f"{pointer} (that listing: lid: glass)"]
+
+
+def test_budget_written_in_words():
+    assert parse("I'm after a blue mug, nothing over twenty dollars.").budget == 20
+    assert parse("Buy a mug for under twenty-five bucks.").budget == 25
+    assert parse("Buy a mug under one hundred dollars.").budget == 100
+
+
+def test_unknown_words_in_the_name_become_a_requirement():
+    item = parse("Buy a chartreuse desk lamp.").items[0]
+    assert item.shelf == "Desk Lamps" and "chartreuse" in item.musts
+
+
+def test_a_plain_name_adds_no_requirement():
+    assert parse("Buy a desk lamp.").items[0].musts == []
+    assert parse("Buy 2 mugs.").items[0].musts == []
+
+
+def test_requirement_read_from_another_listing_is_recognised():
+    brief = parse("Buy a desk lamp in the same colour as the Harbor mug.")
+    assert brief.lookups == ["the same colour as the Harbor mug"]
+    assert brief.items[0].name == "desk lamp"

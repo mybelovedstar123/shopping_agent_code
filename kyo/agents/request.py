@@ -37,10 +37,15 @@ ROLE_PATTERNS = {
     "search": (r"search|find|browse|list.*(product|item)|query",),
     "open": (r"detail|open|view|get.*(product|item|listing)|product.*(page|info)|inspect|show",),
 }
+POINTER = re.compile(
+    r"\b(?:the same|same|matching|unlike|different from|similar to|just like)\b[^.;]*?"
+    r"\b(?:as|to|from|like|the)\b[^.;]*",
+    re.I,
+)
 APPROVAL = r"\b(approv\w*|confirm\w* with me|check with me|ask me (first|before)|my (ok|okay))\b"
 CONTEXT = r"\b(for my|for our|for his|for her|for the|to use|to wear|because|since|as a gift)\b.*"
 LEAD_IN = (
-    r"^.*?\b(?:buy|get|find|purchase|order|need|want|looking for|would like|shop for)\b"
+    r"^.*?\b(?:buy|get|find|purchase|order|need|want|looking for|would like|shop for|after)\b"
     r"(?: to (?:buy|get|find|purchase|order))?(?: me| us)?\s*"
 )
 
@@ -82,15 +87,48 @@ def category_labels(tools: list[dict[str, Any]]) -> list[str]:
     return found
 
 
+TENS = {
+    "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70,
+    "eighty": 80, "ninety": 90,
+}  # fmt: skip
+UNITS_AND_TEENS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
+    "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+    "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19,
+}  # fmt: skip
+_SPELLED = "|".join([*TENS, *UNITS_AND_TEENS, "hundred", "a"])
+
+
+def _spelled_money_to_digits(text: str) -> str:
+    """Rewrite amounts such as 'twenty five dollars' as '25 dollars'."""
+
+    def convert(match: re.Match) -> str:
+        total, current = 0, 0
+        for word in re.split(r"[\s-]+", match.group(1).lower()):
+            if word == "hundred":
+                current = max(current, 1) * 100
+            elif word in TENS:
+                current += TENS[word]
+            elif word in UNITS_AND_TEENS:
+                current += UNITS_AND_TEENS[word]
+        total += current
+        return f"{total} {match.group(2)}"
+
+    pattern = rf"\b((?:(?:{_SPELLED})[\s-]+)+)(dollars?|bucks?|usd)\b"
+    return re.sub(pattern, convert, text, flags=re.I)
+
+
 def _money(text: str) -> tuple[float | None, str]:
     """Find the budget. Returns it and the text without that phrase."""
+    text = _spelled_money_to_digits(text)
     limit = (
-        r"(?:(?:for |of )?(?:under|below|less than|at most|no more than|up to|within|maximum of"
+        r"(?:,?\s*(?:for |of )?(?:nothing over|not over|under|below|less than|at most"
+        r"|no more than|up to|within|maximum of"
         r"|max|budget of|budget is|spend(?:ing)?(?: at most)?|cost(?:ing)? (?:at most|under))\s*)"
     )
     patterns = (
         rf"{limit}?\$\s*(\d+(?:\.\d+)?)",
-        rf"{limit}?(\d+(?:\.\d+)?)\s*(?:dollars|usd|bucks)\b",
+        rf"{limit}?(\d+(?:\.\d+)?)\s*(?:dollars?|usd|bucks?)\b",
         r"budget(?: of| is)?\s*(\d+(?:\.\d+)?)",
     )
     for pattern in patterns:
@@ -168,10 +206,17 @@ def _parse_clause(clause: str, labels: list[str]) -> Item | None:
         quantity_found = int(word) if word.isdigit() else NUMBER_WORDS[word]
         text = text[match.end() :]
     name = " ".join(re.sub(r"[^\w\s-]", " ", text).split()).strip().lower()
-    name = re.sub(r"^(some|new|nice|good|another)\s+", "", name)
+    name = re.sub(r"^(?:(?:the|some|new|nice|good|another)\s+)+", "", name)
     if not name:
         return None
-    return Item(name, _best_label(name, labels), max(1, quantity_found), musts)
+    shelf = _best_label(name, labels)
+    # With the kind of product settled by its label, any other word in the name says something
+    # about the product. It must count as a requirement, or the team would ignore it and could
+    # buy the wrong thing.
+    extra = [w for w in name.split() if words(w) and set(words(w)) - set(words(shelf))]
+    if shelf and extra and not set(words(name)) <= set(words(shelf)):
+        musts.append(" ".join(extra))
+    return Item(name, shelf, max(1, quantity_found), musts)
 
 
 def _best_label(name: str, labels: list[str]) -> str:
@@ -224,7 +269,20 @@ def parse_request(request: str, tools: list[dict[str, Any]]) -> Brief:
         flags=re.I,
     )
     body = re.sub(r"\b(each|apiece|per item)\b", " ", body, flags=re.I)
+    if brief.pick in ("most", "least"):
+        body = re.sub(
+            r"\b(?:with |having |that has )?(?:the )?"
+            r"(?:most|highest|largest|biggest|least|lowest|smallest|lightest)"
+            rf"(?: {re.escape(brief.pick_measure)})?\b",
+            " ",
+            body,
+            flags=re.I,
+        )
     labels = category_labels(tools)
+    pointer = POINTER.search(body)
+    if pointer:
+        brief.lookups.append(" ".join(pointer.group().split()))
+        body = body[: pointer.start()] + body[pointer.end() :]
     for clause in _split_items(body):
         item = _parse_clause(clause, labels)
         if item:

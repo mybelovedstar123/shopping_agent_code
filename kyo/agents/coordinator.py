@@ -77,6 +77,11 @@ class _Episode:
             return self.result("unfinished", "this store has no way to check out")
         if not self.tool("search"):
             return self.result("unfinished", "this store has no way to search")
+        if self.brief.lookups:
+            needs = "; ".join(self.brief.lookups)
+            return self.decline(
+                f"this depends on another listing, which cannot be checked: {needs}"
+            )
         for number in range(len(self.brief.items)):
             self.search(number, FIRST_PAGES)
             self.read_candidates(number)

@@ -189,3 +189,27 @@ def test_team_survives_running_out_of_model_budget(calls):
     model = ScriptedModel(lambda prompt: {"ok": True})
     result = run_team("Buy a red desk lamp.", store, model=model, budget=Budget(calls))
     assert result["outcome"] == "purchased"
+
+
+def test_an_unknown_word_is_never_ignored():
+    lamps = [lamp("A", colour="red"), lamp("B", colour="chartreuse")]
+    _, store = shop("Buy a chartreuse desk lamp. Do not ask me anything.", lamps)
+    assert store.order == {"B": 1}
+    result, store = shop("Buy a chartreuse desk lamp. Do not ask me anything.", [lamp("A")])
+    assert result["outcome"] == "declined" and store.order is None
+
+
+def test_a_spelled_out_budget_is_respected():
+    mugs = [mug("A", 30, colour="blue"), mug("B", 15, colour="blue")]
+    _, store = shop(
+        "I'm after a blue mug, nothing over twenty dollars. Do not ask me anything.", mugs
+    )
+    assert store.order == {"B": 1}
+
+
+def test_team_declines_rather_than_buy_on_a_requirement_it_cannot_check():
+    products = [lamp("A", colour="red"), mug("M", colour="teal")]
+    request = "Buy a desk lamp in the same colour as the Harbor mug. Do not ask me anything."
+    result, store = shop(request, products)
+    assert result["outcome"] == "declined" and store.order is None
+    assert "cannot be checked" in result["reason"]

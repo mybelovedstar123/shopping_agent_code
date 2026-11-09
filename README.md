@@ -46,6 +46,13 @@ never see the card number. The same flow is available through `POST /api/runs`.
 
 Set `KYO_DATABASE_URL` to use another database. The default is a local SQLite file.
 
+## How well it works
+
+`python -m kyo.evaluate` scores the team across shopping scenarios. See the
+[latest results](docs/EVALUATION.md) and what they do not prove. A failure to buy is acceptable
+in a hard case, but a wrong purchase is not, so wrong purchases are counted separately and any
+wrong purchase fails the test suite.
+
 ## The agent team
 
 ```python
@@ -90,6 +97,7 @@ with no model at all, using rules. Set `KYO_MODEL_BASE_URL`, `KYO_MODEL_NAME` an
 
 - [Project status](#project-status)
 - [The store](#the-store)
+- [How well it works](#how-well-it-works)
 - [The agent team](#the-agent-team)
 - [Architecture](#architecture)
 - [How an episode runs](#how-an-episode-runs)
