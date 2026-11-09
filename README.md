@@ -29,9 +29,11 @@ sections of this README still describe `agent.py`, the single agent the team gre
 ## The store
 
 ```bash
+docker compose up --build                      # http://127.0.0.1:8000
+
+# or without Docker
 pip install -e .
-python -m kyo.store.seed                       # 144 products in 9 categories
-uvicorn --factory kyo.app:create_app           # http://127.0.0.1:8000, API docs at /docs
+python -m kyo                                  # seeds 144 products on first run
 ```
 
 Shoppers can browse and search, create an account, fill a cart, and check out. No real money
@@ -44,7 +46,15 @@ complete a purchase alone: each run works in its own cart, and checkout waits fo
 to approve the exact cart and total. The shopper's approval places the order, so the agents
 never see the card number. The same flow is available through `POST /api/runs`.
 
-Set `KYO_DATABASE_URL` to use another database. The default is a local SQLite file.
+| Setting | Default | Meaning |
+|---|---|---|
+| `KYO_DATABASE_URL` | Local SQLite file | Where the store keeps its data |
+| `KYO_HOST`, `KYO_PORT` | `127.0.0.1`, `8000` | Where `python -m kyo` listens |
+| `KYO_PUBLISH_PORT` | `8000` | The port `docker compose` publishes on this machine |
+| `KYO_SEED` | `1` | Set to `0` to skip adding the sample catalog |
+| `KYO_SECURE_COOKIES` | `0` | Set to `1` when serving over HTTPS |
+| `KYO_LOG_LEVEL` | `INFO` | Log level of the JSON logs |
+| `KYO_MODEL_BASE_URL`, `KYO_MODEL_NAME`, `KYO_MODEL_API_KEY` | Unset | An OpenAI-compatible model for the agents. Without one, they use rules |
 
 ## How well it works
 

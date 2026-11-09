@@ -27,3 +27,22 @@ jobs:
 
       - name: Test
         run: pytest
+
+  image:
+    name: Build the Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build
+        run: docker build --tag kyo-shop .
+
+      - name: Start it and check that it answers
+        run: |
+          docker run --detach --name shop --publish 127.0.0.1:8000:8000 kyo-shop
+          for attempt in $(seq 1 30); do
+            curl --silent --fail http://127.0.0.1:8000/api/health && exit 0
+            sleep 2
+          done
+          docker logs shop
+          exit 1
