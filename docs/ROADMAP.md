@@ -8,6 +8,8 @@ Wed Nov 04, 20:00 CST to Mon Nov 09, 00:00 CST. The times below are scheduled me
 The work is prepared ahead and released at these times, so they do not measure
 the hours spent on each issue. A release waits if its checks fail.
 
+With version 1.0.0, every issue below is merged.
+
 ## M1 Foundations
 
 Packaging, CI, tests around the existing agent, and the target architecture. Due Thu Nov 05, 06:00 CST.

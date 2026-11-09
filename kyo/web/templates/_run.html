@@ -24,7 +24,7 @@
     <p>Nothing is bought unless you approve. This is the whole order:</p>
     <ul class="summary">
       {% for line in question.lines %}
-      <li>{{ line.quantity }} x <a href="/product/{{ line.id }}">{{ line.title }}</a> <span class="number">{{ "$%.2f"|format(line.subtotal) }}</span></li>
+      <li><span>{{ line.quantity }} x <a href="/product/{{ line.id }}">{{ line.title }}</a></span> <span class="number">{{ "$%.2f"|format(line.subtotal) }}</span></li>
       {% endfor %}
     </ul>
     <p class="total">Total: {{ "$%.2f"|format(question.total) }}</p>

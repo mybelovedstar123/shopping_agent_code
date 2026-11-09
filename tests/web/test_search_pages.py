@@ -115,3 +115,14 @@ def test_product_page_marks_out_of_stock(client, app):
 def test_unknown_product_gives_a_helpful_404(client):
     reply = client.get("/product/NOPE")
     assert reply.status_code == 404 and "could not find that product" in reply.text
+
+
+def test_heading_says_what_is_being_shown(client):
+    assert "<h1>Mugs</h1>" in client.get("/search", params={"category": "mugs"}).text
+    assert "<h1>All products</h1>" in client.get("/search").text
+    assert "Results for" in client.get("/search", params={"q": "mug"}).text
+
+
+def test_favicon_is_served(client):
+    assert 'href="/static/favicon.svg"' in client.get("/").text
+    assert client.get("/static/favicon.svg").status_code == 200

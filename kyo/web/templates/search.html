@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Search - Kyo Shop{% endblock %}
 {% block content %}
-<h1>{% if q %}Results for &ldquo;{{ q }}&rdquo;{% else %}All products{% endif %}</h1>
+<h1>{% if q %}Results for &ldquo;{{ q }}&rdquo;{% elif category_name %}{{ category_name }}{% else %}All products{% endif %}</h1>
 <div class="search-layout">
   <form class="filters" action="/search" method="get" aria-label="Filter results">
     <input type="hidden" name="q" value="{{ q }}">

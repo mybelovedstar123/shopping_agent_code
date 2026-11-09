@@ -6,7 +6,7 @@
   {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
   <ul class="summary">
     {% for line in cart.lines %}
-    <li>{{ line.quantity }} x {{ line.title }} <span class="number">{{ "$%.2f"|format(line.subtotal) }}</span></li>
+    <li><span>{{ line.quantity }} x {{ line.title }}</span> <span class="number">{{ "$%.2f"|format(line.subtotal) }}</span></li>
     {% endfor %}
   </ul>
   <p class="total">Total: {{ "$%.2f"|format(cart.total) }}</p>
