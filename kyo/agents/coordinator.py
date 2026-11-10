@@ -39,6 +39,7 @@ class _Episode:
         self.searched: set[str] = set()
         self.model_reviews: list[str] = []
         self.buys_refused = 0
+        self.prices_stale = False
 
     # ------------------------------------------------------------ helpers
 
@@ -173,6 +174,8 @@ class _Episode:
         )
         if notes.get("budget"):
             self.brief.budget = notes["budget"]
+        if notes.get("price_moved"):
+            self.prices_stale = True
         for need in notes.get("adds") or []:
             for item in self.brief.items:
                 item.drop_property(need)
@@ -332,14 +335,18 @@ class _Episode:
         return gone or (set(lines) if len(lines) == 1 else set())
 
     def review(self, lines: dict[str, int], picks: dict[int, str]) -> dict[str, Any]:
-        if self.brief.pick != "any" or self.left() > len(lines) + self.reserve():
-            tool = self.read_tool()
-            if tool and self.left() > len(lines) + 2:
-                self.ask(
-                    "catalog",
-                    "refresh",
-                    {"tool": tool, "schema": self.schemas[tool], "ids": list(lines)},
-                )
+        """Re-read the lines for their current price and stock, then have the cart judged."""
+        tool = self.read_tool()
+        due = sum(
+            int(s.get("messages") or 0) for s in self.brief.process if s.get("when") == "order"
+        )
+        if tool and self.left() > len(lines) + due:
+            self.ask(
+                "catalog",
+                "refresh",
+                {"tool": tool, "schema": self.schemas[tool], "ids": list(lines)},
+            )
+            self.prices_stale = False
         records = self.ask("catalog", "records")["records"]
         verdict = self.ask(
             "review",
@@ -347,6 +354,9 @@ class _Episode:
             {"brief": self.brief.to_dict(), "lines": lines, "records": records, "assign": picks},
         )
         self.model_reviews.append(verdict["model_review"])
+        if self.prices_stale and self.brief.budget is not None:
+            verdict["ok"] = False
+            verdict["problems"].append("a price changed and there are no steps to read it again")
         return verdict
 
     def handle_problems(self, lines: dict[str, int], verdict: dict[str, Any]) -> bool:

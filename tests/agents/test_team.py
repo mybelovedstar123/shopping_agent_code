@@ -238,3 +238,36 @@ def test_each_in_another_sentence_does_not_lift_a_total_budget():
         [lamp("L1", 20)],
     )
     assert result["outcome"] == "declined" and store.order is None
+
+
+class PriceRiseStore(ScenarioStore):
+    """Raises a listing's price once it is carted, saying so in the reply when `say` is set."""
+
+    def __init__(self, products, rise, price, say=False, **options):
+        super().__init__(products, **options)
+        self.rise, self.price, self.say = rise, price, say
+
+    def _update_cart(self, args):
+        result = super()._update_cart(args)
+        if args["product_id"] == self.rise and args["quantity"] > 0:
+            self.products[self.rise].price = self.price
+            if self.say:
+                result["note"] = f"The price of {self.rise} has increased to {self.price}."
+            self.rise = None
+        return result
+
+
+@pytest.mark.parametrize("say", [False, True])
+@pytest.mark.parametrize("max_steps", [6, 7, 30])
+def test_a_price_rise_after_carting_never_breaks_the_budget(say, max_steps):
+    store = PriceRiseStore([lamp("L1", 20)], "L1", 25.0, say=say)
+    result = run_team(
+        "Buy a red desk lamp under $22. Do not ask me anything.", store, max_steps=max_steps
+    )
+    assert store.order is None and result["outcome"] != "purchased"
+
+
+def test_the_reported_total_uses_the_price_read_before_checkout():
+    store = PriceRiseStore([lamp("L1", 20)], "L1", 21.0)
+    result = run_team("Buy a red desk lamp under $22. Do not ask me anything.", store, max_steps=6)
+    assert store.order == {"L1": 1} and result["total"] == 21.0
