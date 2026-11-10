@@ -193,6 +193,24 @@ def test_rules_take_over_when_the_model_fails(reply):
     assert context.notes
 
 
+def test_malformed_parts_of_a_model_brief_are_dropped_or_read_as_one_value():
+    brief, source, _ = read(
+        ScriptedModel(
+            [
+                {
+                    **MODEL_BRIEF,
+                    "items": [{"name": "kettle", "musts": "colour: red"}],
+                    "roles": {"buy": "checkout", "search": ["search_products"]},
+                    "fits": [{"item": 1, "with": 2}],
+                    "lookups": 7,
+                }
+            ]
+        )
+    )
+    assert source == "model" and brief.items[0].musts == ["colour: red"]
+    assert brief.roles == {"buy": "checkout"} and brief.fits == [] and brief.lookups == []
+
+
 def test_no_model_uses_rules():
     assert read(None)[1] == "rules"
 

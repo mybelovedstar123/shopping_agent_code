@@ -318,3 +318,46 @@ def test_a_budget_given_in_an_answer_is_respected():
     )
     result = run_team("Buy a desk lamp. Ask me at most 1 question.", store)
     assert store.order == {"L2": 1} and result["brief"]["budget"] == 15
+
+
+GOOD_BRIEF = {
+    "items": [
+        {"name": "desk lamp", "shelf": "Desk Lamps", "quantity": 1, "musts": ["colour: red"]}
+    ],
+    "messages": 1,
+    "roles": {
+        "search": "search_products",
+        "open": "get_product",
+        "cart": "update_cart",
+        "buy": "checkout",
+        "refuse": "decline_purchase",
+        "ask": "ask_shopper",
+    },
+}
+
+
+@pytest.mark.parametrize(
+    "replies",
+    [
+        {"You choose the questions": {"ask": [{"item": "first", "label": "finish"}]}},
+        {
+            "You choose the questions": {"ask": [{"item": 1, "label": "finish"}]},
+            "A shopping agent asked": {"needs": [{"item": "lamp", "need": "finish: matte"}]},
+        },
+        {"You prepare a shopping task": {**GOOD_BRIEF, "fits": [{"item": 1, "with": 2}]}},
+        {"While a shopping agent works": {"kind": "change", "gone": 5, "add": "x"}},
+        {"You are the last check": {"ok": False, "problems": 3, "better": "L1"}},
+    ],
+)
+def test_malformed_model_replies_never_end_the_run(replies):
+    def reply(prompt):
+        for prefix, value in replies.items():
+            if prompt.startswith(prefix):
+                return value
+        if prompt.startswith("You prepare a shopping task"):
+            return GOOD_BRIEF
+        return {"ask": []} if prompt.startswith("You choose the questions") else "{}"
+
+    store = ScenarioStore([lamp("L1", finish="matte"), lamp("L2", finish="matte")])
+    result = run_team("Buy a red desk lamp.", store, model=ScriptedModel(reply))
+    assert result["outcome"] in ("purchased", "declined")

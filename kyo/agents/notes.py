@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 from ..domain import Item
-from ..models.base import Model, ModelError, ask_json
+from ..models.base import Model, ModelError, ask_json, listed
 from ..prompts import NOTE
 from ..runtime.agent import Agent
 
@@ -137,12 +137,12 @@ class NotesAgent(Agent):
         if got.get("kind") not in (None, "change"):
             return {}
         budget = got.get("budget")
-        rows = lambda key: [e for e in got.get(key) or [] if isinstance(e, dict) and e.get("need")]  # noqa: E731
+        rows = lambda key: [e for e in listed(got, key) if isinstance(e, dict) and e.get("need")]  # noqa: E731
         return {
             "budget": budget if isinstance(budget, int | float) and budget > 0 else None,
             "adds": [str(e["need"]).strip() for e in rows("add")],
             "drops": [str(e["need"]).strip() for e in rows("drop")],
-            "gone": [str(g) for g in got.get("gone") or [] if str(g) in known],
+            "gone": [str(g) for g in listed(got, "gone") if str(g) in known],
             "sold_out": got.get("sold_out") is True,
             "price_moved": got.get("price_moved") is True,
         }

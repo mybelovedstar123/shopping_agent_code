@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..domain import Brief
+from ..models.base import item_index
 from ..runtime.agent import Agent, AgentError
 
 READ_PER_ITEM = 4
@@ -403,7 +404,7 @@ class _Episode:
         gate = self.perform("order", lines)
         if not gate["proceed"]:
             for need in gate.get("needs") or []:
-                index = min(max(1, int(need.get("item") or 1)), len(self.brief.items)) - 1
+                index = item_index(need.get("item") or 1, len(self.brief.items))
                 self.brief.items[index].add_need(str(need["need"]))
             if gate.get("needs"):
                 return None

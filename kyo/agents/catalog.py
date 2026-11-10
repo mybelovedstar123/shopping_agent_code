@@ -19,6 +19,7 @@ from ..runtime.agent import Agent
 from ..schema import param_named, text_params
 
 MAX_PAGES_PER_SEARCH = 3
+SHAPE_KEYS = ("rows", "count", "next")
 NOT_PROPERTY = re.compile(
     r"\b(?:options?|variants?|models?|sku|ids?|codes?|asin|upc|ean|barcodes?|warrant\w*|video|url"
     r"|links?|images?|photos?|condition)\b"
@@ -149,7 +150,8 @@ class CatalogAgent(Agent):
             got = ask_json(self.model, prompt, 2500) or {}
         except ModelError:
             return None
-        return {k: got.get(k) for k in ("rows", "count", "next")} if got.get("rows") else None
+        shape = {k: got.get(k) if isinstance(got.get(k), str) else None for k in SHAPE_KEYS}
+        return shape if shape["rows"] else None
 
     def _absorb_rows(self, observation: Any, shape: dict[str, Any]) -> list[str]:
         if not isinstance(observation, dict):

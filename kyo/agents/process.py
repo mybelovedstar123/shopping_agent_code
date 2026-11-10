@@ -9,7 +9,7 @@ import json
 import re
 from typing import Any
 
-from ..models.base import Model, ModelError, ask_json
+from ..models.base import Model, ModelError, ask_json, listed
 from ..prompts import GATE
 from ..runtime.agent import Agent
 from ..schema import text_params
@@ -128,7 +128,7 @@ class ProcessAgent(Agent):
             if got is None:
                 return None
             hold = str(got.get("hold") or "").strip()
-            needs = [n for n in got.get("needs") or [] if isinstance(n, dict) and n.get("need")]
+            needs = [n for n in listed(got, "needs") if isinstance(n, dict) and n.get("need")]
             if hold or needs:
                 return {
                     "proceed": False,
@@ -142,7 +142,7 @@ class ProcessAgent(Agent):
             if not call:
                 missing = [
                     str(s.get("step"))
-                    for s in got.get("steps") or []
+                    for s in listed(got, "steps")
                     if isinstance(s, dict) and s.get("done") is not True
                 ]
                 return {
@@ -152,6 +152,8 @@ class ProcessAgent(Agent):
                     "not_done": missing,
                 }
             name, args = str(call.get("tool") or ""), call.get("args") or {}
+            if not isinstance(args, dict):
+                return None
             allowed = {t["function"]["name"] for t in payload.get("tools") or []}
             if name not in allowed | {payload.get("ask_tool")}:
                 context.note(f"the model asked for {name or 'no tool'}, which steps may not use")

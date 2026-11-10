@@ -13,7 +13,7 @@ from typing import Any
 from ..compat import fit_problem
 from ..domain import Brief, Item, Listing
 from ..fit import check_need, same_kind
-from ..models.base import Model, ModelError, ask_json
+from ..models.base import Model, ModelError, ask_json, listed
 from ..prompts import AUDIT, CHECK
 from ..runtime.agent import Agent
 
@@ -200,8 +200,8 @@ class ReviewAgent(Agent):
             return "unavailable", [], []
         if got.get("ok") is not False:
             return "passed", [], []
-        problems = [str(p) for p in got.get("problems") or []] or ["the model review failed"]
-        better = [str(b) for b in got.get("better") or [] if str(b) in records]
+        problems = [str(p) for p in listed(got, "problems")] or ["the model review failed"]
+        better = [str(b) for b in listed(got, "better") if str(b) in records]
         return "failed", problems, better
 
     def on_decline(self, payload: dict[str, Any], context) -> dict[str, Any]:

@@ -11,7 +11,7 @@ from typing import Any
 
 from ..domain import Item
 from ..fit import words
-from ..models.base import Model, ModelError, ask_json
+from ..models.base import Model, ModelError, ask_json, item_index, listed
 from ..prompts import HEAR, PLAN
 from ..runtime.agent import Agent
 from ..schema import text_params
@@ -171,9 +171,9 @@ class InterviewAgent(Agent):
             context.note(f"the model could not plan questions: {error}")
             return {}
         picks: dict[int, list[str]] = {}
-        for pick in plan.get("ask") or []:
+        for pick in listed(plan, "ask"):
             if isinstance(pick, dict) and str(pick.get("label") or "").strip():
-                number = min(max(1, int(pick.get("item") or 1)), len(items)) - 1
+                number = item_index(pick.get("item") or 1, len(items))
                 picks.setdefault(number, []).append(str(pick["label"]))
         return picks
 
@@ -206,9 +206,9 @@ class InterviewAgent(Agent):
             return None
 
         def index(entry: dict[str, Any]) -> int:
-            return min(max(1, int(entry.get("item") or number + 1)), len(items)) - 1
+            return item_index(entry.get("item") or number + 1, len(items), number)
 
-        rows = lambda key: [e for e in got.get(key) or [] if isinstance(e, dict)]  # noqa: E731
+        rows = lambda key: [e for e in listed(got, key) if isinstance(e, dict)]  # noqa: E731
         budget = got.get("budget")
         return {
             "needs": [
