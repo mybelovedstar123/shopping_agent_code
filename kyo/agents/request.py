@@ -121,7 +121,7 @@ def _spelled_money_to_digits(text: str) -> str:
 PER_ITEM = r"(?:each|apiece|per item|per unit|a piece)"
 
 
-def _money(text: str) -> tuple[float | None, str, bool]:
+def read_money(text: str) -> tuple[float | None, str, bool]:
     """Find the budget. Returns it, the text without that phrase, and whether it is per item."""
     text = _spelled_money_to_digits(text)
     limit = (
@@ -263,7 +263,7 @@ def parse_request(request: str, tools: list[dict[str, Any]]) -> Brief:
         step = {"step": "get the shopper's approval", "when": "order", "messages": 1}
         brief.process.append(step)
     brief.pick, brief.pick_measure = _pick(text)
-    brief.budget, text, each = _money(text)
+    brief.budget, text, each = read_money(text)
     if each:
         brief.budget_scope = "each"
 

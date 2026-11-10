@@ -15,6 +15,7 @@ from ..models.base import Model, ModelError, ask_json
 from ..prompts import HEAR, PLAN
 from ..runtime.agent import Agent
 from ..schema import text_params
+from .request import read_money
 
 NO_PREFERENCE = re.compile(
     r"\b(don'?t mind|do not mind|no preference|doesn'?t matter|does not matter|don'?t care"
@@ -52,8 +53,14 @@ def spoken(observation: Any) -> str:
     return " ".join(found)
 
 
-def read_answer(answer: str, label: str, values: list[str]) -> dict[str, str] | None:
-    """Turn a reply about one property into a requirement, or None when it gives none."""
+def read_answer(
+    answer: str, label: str, values: list[str], loose: bool = True
+) -> dict[str, str] | None:
+    """Turn a reply about one property into a requirement, or None when it gives none.
+
+    With loose False, only a known value or "no preference" counts: the reply was about
+    something else, such as the budget.
+    """
     text = " ".join(answer.split()).strip(" .!")
     if not text or NO_PREFERENCE.search(text):
         return {"free": label}
@@ -67,6 +74,8 @@ def read_answer(answer: str, label: str, values: list[str]) -> dict[str, str] | 
             rf"\b(not|no|anything but|except|avoid)\b[^.]*{re.escape(value)}", text, re.I
         )
         return {"need": f"{label}: {'not ' if negative else ''}{value}"}
+    if not loose:
+        return None
     return {"need": f"{label}: {POLITE.sub('', text).strip(' .!,')}"}
 
 
@@ -174,12 +183,14 @@ class InterviewAgent(Agent):
             if heard is not None:
                 return heard
             context.note("the model could not read an answer; using rules")
-        read = read_answer(answer, label, values.get((number, label), []))
+        budget, rest, _ = read_money(answer)
+        read = read_answer(rest, label, values.get((number, label), []), loose=budget is None)
+        heard: dict[str, Any] = {"budget": budget} if budget else {}
         if read is None:
-            return {}
+            return heard
         if "free" in read:
-            return {"free": [{"item": number, "property": read["free"]}]}
-        return {"needs": [{"item": number, "need": read["need"]}]}
+            return {**heard, "free": [{"item": number, "property": read["free"]}]}
+        return {**heard, "needs": [{"item": number, "need": read["need"]}]}
 
     def _hear_with_model(self, number, question, answer, items) -> dict[str, Any] | None:
         prompt = (

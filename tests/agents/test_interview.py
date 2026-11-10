@@ -130,3 +130,16 @@ def test_rules_take_over_when_the_model_fails():
     result, questions = run(["red"], messages=1, model=model)
     assert questions == ["What colour would you like for the lamp?"]
     assert result["needs"] == [{"item": 0, "need": "colour: red"}]
+
+
+@pytest.mark.parametrize(
+    "answer, needs",
+    [
+        ("Red, and my budget is now 15 dollars.", [{"item": 0, "need": "colour: red"}]),
+        ("I don't mind, but I can only spend $15 now.", []),
+        ("Just keep it under $15.", []),
+    ],
+)
+def test_a_budget_in_an_answer_is_heard_without_a_model(answer, needs):
+    result, _ = run([answer], messages=1)
+    assert result["budget"] == 15 and result["needs"] == needs

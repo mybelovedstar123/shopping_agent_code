@@ -309,3 +309,12 @@ def test_the_process_steps_cannot_change_the_reviewed_cart():
         model=ScriptedModel(reply),
     )
     assert store.order == {"L1": 1} and result["lines"] == {"L1": 1}
+
+
+def test_a_budget_given_in_an_answer_is_respected():
+    store = ScenarioStore(
+        [lamp("L1", 20, finish="matte"), lamp("L2", 12, finish="glossy")],
+        answers={"": "I don't mind, but I can only spend $15 now."},
+    )
+    result = run_team("Buy a desk lamp. Ask me at most 1 question.", store)
+    assert store.order == {"L2": 1} and result["brief"]["budget"] == 15
