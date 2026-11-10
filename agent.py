@@ -22,10 +22,12 @@ SHOW_CHARS = 450
 ENV_GAP = 0.25
 TABLE_KEYS = 18
 CHEAPER_SHOWN = 4
+TRAIL_ROOM = 15
 CRASH_TURNS = 3
 SHORT_KEEP = 8
 SET_SHOWN = 2
 STOCK_OUT = '^(?:no|none|false|0|n)$|out[ _-]?of[ _-]?stock|sold[ _-]?out|unavailable|not[ _-]?available'
+HUNT_BY = 200.0
 TITLE_CHARS = 200
 TEXT_CHARS = 3000
 OBS_LIMIT = 15000
@@ -44,6 +46,7 @@ CAP_ARG = '(?:^|_)(?:cap|max|maximum|ceiling|under|up_?to)(?:_|$)'
 CAP_NOT = 'result|row|page|count|size|num|item|step'
 CAP_PRICED = 'price|cost|budget|spend|money|amount'  # a limit argument's name, when no search has shown one holding yet
 CAP_LOW = '(?:^|_)(?:min|minimum|low|lowest|least|from|start|offset|floor)(?:_|$)'
+EARLY_TRAILS = 3  # chain rounds the early follow may spend; the checkout keeps its own
 CAP_CHANCE = 0.05  # how rarely rows drawn at random from their labels would all sit under a value, for that value to count as a limit held
 WALK_ROOM = 10  # steps beyond the finish a walk listing after the first needs: a refusal at the next checkout still needs a swap
 WALK_CALLS = 4  # capped shelf listings per cart line at one checkout (race 16: 456 rows on a shelf, 6 a page)
@@ -64,7 +67,7 @@ CHECK = 'You are the last check before a shopping agent checks out. Decide from 
 READING = 'the listing\'s attribute for a property decides when its key names that same property (any key spelling, one element of a list is enough, synonyms and unit conversions count, a value containing the required value\'s words counts, such as "deep teal" for teal, limits include the edge); a key for a different property, even a related one (a handle colour is not the body\'s colour), decides nothing; when no attribute names that property, the wanted value stated under another attribute or in the title or description counts (a bare figure that does not say what it measures counts for nothing); a requirement the category label itself states is met by that category; the category label must match the item; a rule of being unlike another listing\'s value counts as met unless the records show that same value; out-of-stock listings and listings that break the budget do not fit.'
 AUDIT = 'A shopping agent wants to end without buying because it thinks nothing fits. Check the listing records shown against the requirements, with these reading rules: ' + READING + '\nRecords marked ROW were seen only as a search result row: their page (the attributes) has not been read, so they can be neither passed nor failed on a property the row does not show.\nReturn ONE JSON object and nothing else: {"fits": {"item number": [listing ids that appear to meet every requirement, cheapest first, at most 4]}, "open": [ids of ROW listings of a requested kind, inside the budget, whose page could show that they fit, most promising first, at most 6], "reason": "one sentence"}'
 UNMIX = 'A shopper\'s request was read into firm requirements on a product. Some requirements take their value from another listing the request points at, and the words that pick out that other listing (its kind, its shop, the properties named after it with "with ...") are sometimes read by mistake as requirements on the product being bought. Using the request\'s wording, say which of the OTHER REQUIREMENTS below only describe that other listing. Return ONE JSON object and nothing else: {"describe_other": [those requirements copied exactly; empty when every one is a real requirement on the product]}'
-TRAIL = 'A shopping agent is about to check out. Some requirements take their value from another listing instead of stating it, and a listing\'s page can send the reader on to a further listing for that property. The order counts only when the agent has opened in full every listing along each such chain. Follow each requirement\'s chain from the requirement\'s own description, link by link, through the pages\' own words, using the records below (OPENED: the agent has opened that page; ROW: seen only as a search result row, its page not read).\nReturn ONE JSON object and nothing else: {"chains": [{"need": the requirement copied exactly, "links": [{"id": the listing id when a record below is that link, else "", "about": how the requirement or the previous page describes that listing, "find": "for a link not found: search words (its shop and the values the description gives)"}], "done": true when the last link is an OPENED page that states the property\'s value itself (also when the requirement asks for a value other than or unlike that one: the page\'s value is what it is measured against), else false, "value": the property\'s value as stated on that last page, or ""}]}\nA record is a link only when it matches the whole description of that link: the shop or brand, the kind of product AND every property value the description gives (for example "a 10 pieces multipack" rules out the same shop\'s listing with 10 capsules and no multipack); when no record matches all of it, that link is not found yet, even if the same shop sells other listings of that kind. Give "find" for such a link: the shop\'s name and the description\'s values, as a few search words.\nList each chain\'s links in order and stop at the first link whose page is not OPENED or not found, since its words are still unknown.'
+TRAIL = 'A shopping agent is about to check out. Some requirements take their value from another listing instead of stating it, and a listing\'s page can send the reader on to a further listing for that property. The order counts only when the agent has opened in full every listing along each such chain. Follow each requirement\'s chain from the requirement\'s own description, link by link, through the pages\' own words, using the records below (OPENED: the agent has opened that page; ROW: its page not read, seen only as a search result row or by its attributes).\nReturn ONE JSON object and nothing else: {"chains": [{"need": the requirement copied exactly, "links": [{"id": the listing id when a record below is that link, else "", "about": how the requirement or the previous page describes that listing, "find": "for a link not found: search words (its shop and the values the description gives)"}], "done": true when the last link is an OPENED page that states the property\'s value itself (also when the requirement asks for a value other than or unlike that one: the page\'s value is what it is measured against), else false, "value": the property\'s value as stated on that last page; when the requirement asks for what goes with that value and the page names what its value pairs with, that other value; or ""}]}\nA record is a link only when it matches the whole description of that link: the shop or brand, the kind of product AND every property value the description gives (for example "a 10 pieces multipack" rules out the same shop\'s listing with 10 capsules and no multipack); when no record matches all of it, that link is not found yet, even if the same shop sells other listings of that kind. Give "find" for such a link: the shop\'s name and the description\'s values, as a few search words.\nList each chain\'s links in order and stop at the first link whose page is not OPENED or not found, since its words are still unknown.'
 GATE = 'A shopping agent is about to STAGE. The shopper\'s request asks for the steps below along the way. Decide from the numbered RECORD of what the agent has done whether each step due before this STAGE is done for the cart as it is now. A step counts as done only when a RECORD line shows it being done and, for a step about the cart or the order, that line comes after the cart last changed and its reply grants it; questions on a product\'s properties do not do a step.\nWhen a step is still missing, give the one store call that does it next: a tool from TOOLS with its arguments. A message to the shopper goes through the messaging tool: one short sentence or question about that step alone, in plain words, naming no product properties or values the step does not need. Give no call when every due step is done or when the messages or steps left cannot do the missing one.\nReturn ONE JSON object and nothing else: {"steps": [{"step": the step, "done": true or false, "lines": [the RECORD line numbers that show it done]}], "call": {"tool": "...", "args": {...}} or null, "hold": what a reply asks to change before going on, or "", "needs": [{"item": item number, "need": "property: constraint"} for each firm requirement such a reply states]}'
 SWAP = "A listing in a shopping agent's cart has just sold out. Find replacements for that cart line among the other listing records shown, with these reading rules: " + READING + '\nReturn ONE JSON object and nothing else: {"fits": [{"id": listing id, "price": its price as a number as the record shows it} for every listing that appears to meet every requirement of the sold-out line\'s item, at most 6], "reason": "one sentence"}'
 SHAPE = 'A store tool returned the result below. Name its parts by the exact keys the result and the tool\'s parameters use. Return ONE JSON object and nothing else: {"rows": the key of the list of listings, "count": the key holding how many listings matched in all (not how many are shown), or null, "next": the key holding the value that asks for the following page, or null, "next_arg": the tool parameter that takes that value, or null, "price": the key, inside a row, of the listing\'s price, or null, "stock": the key, inside a row, that says whether the listing can be bought now, or null}'
@@ -809,6 +812,7 @@ class Kyo:
         self.link_tried: set[str] = set()
         self.capped: set[tuple[str, float]] = set()
         self.factless: set[tuple[str, str]] = set()
+        self.trail_room: int | None = None
         self.id_key: str | None = None
         self.facts_from: dict[str, bool] = {}
         self.queued: list[str] = []
@@ -849,6 +853,7 @@ class Kyo:
         self.read_args: dict[str, tuple[str, dict[str, Any]]] = {}
         self.value_rows: set[str] = set()
         self.row_keys: set[str] = set()
+        self.refuse_trailed = False
         self.env_at = 0.0
         self.bare_pages: dict[str, int] = {}
         self.code_tries: list[bool] = []
@@ -3111,25 +3116,53 @@ class Kyo:
             text += '. Listings that look better: ' + ', '.join(better)
         return text + '. Fix the cart (or show the review is wrong by re-reading the records), then check out.'
 
-    def trail(self) -> tuple[str, bool]:
+    def refuse_trail(self) -> str:
+        """Once, before a decline with room left: follow what a requirement points at; what that showed, '' when nothing."""
+        live = {need for _, need in self.needs_now()}
+        if self.refuse_trailed or self.left() < TRAIL_ROOM or self.clock() > HUNT_BY or not any((need in live and need not in self.ref_values for _, need in self.refs)):
+            return ''
+        self.refuse_trailed = True
+        text, _ = self.trail(HUNT_BY)
+        return text + 'Search for those values now and buy what fits; end without a purchase only if nothing does.' if text else ''
+
+    def early_trail(self) -> str:
+        """Follow the chains of requirements that point at another listing, once, while there is room to act on what they say."""
+        live = {need for _, need in self.needs_now()}
+        if self.left() < TRAIL_ROOM or self.clock() > HUNT_BY or not any((need in live and need not in self.ref_values for _, need in self.refs)):
+            return ''
+        kept = (self.trails, self.trail_blocks)
+        self.trails, self.trail_room = 0, EARLY_TRAILS
+        try:
+            text, _ = self.trail(HUNT_BY)
+        finally:
+            (self.trails, self.trail_blocks), self.trail_room = kept, None
+        self.trace.append({'kind': 'early_trail', 'left': self.left(), 'values': list(self.ref_values.values())[:3]})
+        return text
+
+    def page_read(self, ident: str) -> bool:
+        """Whether a listing's page was read: opened, and through the store's page view when it has one apart from the attribute view."""
+        page = self.roles.get('offer')
+        return ident in self.opened and (not page or not self.single_target(page) or page in self.views.get(ident, ()))
+
+    def trail(self, stop: float | None=None) -> tuple[str, bool]:
         live = {need for _, need in self.needs_now()}
         pending = [need for _, need in self.refs if need in live and need not in self.ref_values]
         tool = self.roles.get('offer') or self.roles.get('open')
         target = self.single_target(tool)
         seen: list[str] = []
         lost: list[str] = []
-        while pending and self.trails < (6 if self.left() > 15 else 4) and (self.cost < SPEND_HARD):
+        while pending and self.trails < min(6 if self.left() > 15 else 4, self.trail_room or 6) and (self.cost < SPEND_HARD) and (stop is None or self.clock() <= stop):
             self.trails += 1
             records = []
             for ident in reversed(self.seen_order):
-                record = self.full.get(ident) or self.rows.get(ident) if ident in self.opened else None
+                record = self.full.get(ident) or self.rows.get(ident) if self.page_read(ident) else None
                 if record and len(records) < 45:
                     records.append('OPENED ' + _dump(_clip(record, 300))[:1400])
             for ident in reversed(self.seen_order):
                 if len(records) >= 60:
                     break
-                if ident not in self.opened or not (self.full.get(ident) or self.rows.get(ident)):
-                    records.append('ROW ' + _dump(_clip(self.rows.get(ident), 80))[:300])
+                if not self.page_read(ident) or not (self.full.get(ident) or self.rows.get(ident)):
+                    records.append('ROW ' + (_dump(_clip(self.full[ident], 120))[:700] if ident in self.full else _dump(_clip(self.rows.get(ident), 80))[:300]))
             prompt = TRAIL + '\n\nREQUIREMENTS WITH A VALUE ON ANOTHER LISTING:\n' + '\n'.join(pending)
             prompt += '\n\nRECORDS (newest first):\n' + '\n'.join(records)
             got = self.ask_json(prompt, [LIGHT] + ([HEAVY] if self.cost + HEAVY_ROOM <= SPEND_HARD else []), 4500) or {}
@@ -3145,15 +3178,15 @@ class Kyo:
                     continue
                 links = [l for l in _items(chain.get('links')) if isinstance(l, dict)]
                 ids = [str(l.get('id') or '').strip() for l in links]
-                if chain.get('done') is True and links and all((i in self.opened for i in ids)) and str(chain.get('value') or '').strip():
+                if chain.get('done') is True and links and all((self.page_read(i) for i in ids)) and str(chain.get('value') or '').strip():
                     self.ref_values[need] = str(chain['value']).strip()
                     self.version += 1
                     continue
-                if links and all((i in self.opened for i in ids)) and (not str(links[-1].get('find') or '').strip()):
+                if links and all((self.page_read(i) for i in ids)) and (not str(links[-1].get('find') or '').strip()):
                     self.ref_values[need] = str(chain.get('value') or '').strip() or f'as stated on {ids[-1]}'
                     self.version += 1
                     continue
-                closed = [i for i in ids if i in self.rows and i not in self.opened]
+                closed = [i for i in ids if i in self.rows and not self.page_read(i)]
                 if closed:
                     reach += [i for i in closed if i not in reach]
                 else:
@@ -3173,7 +3206,7 @@ class Kyo:
             for ident in reach[:max(0, min(3, 6 - len(seen)))]:
                 faults: list[str] = []
                 args = _shape({target: ident}, self.schemas.get(tool), 'args', faults)
-                if faults:
+                if faults or self.rushed():
                     break
                 reply = self.act(tool, args)
                 if reply is None or self.finished:
