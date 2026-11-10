@@ -16,6 +16,7 @@ HEAVY_ROOM = 0.02
 WAITS = (4, 10, 20, 35)
 WAIT_TOTAL = 45
 SHOW_CHARS = 450
+ENV_GAP = 0.25
 STOCK_OUT = '^(?:no|none|false|0|n)$|out[ _-]?of[ _-]?stock|sold[ _-]?out|unavailable|not[ _-]?available'
 OBS_LIMIT = 15000
 HISTORY_LIMIT = 150000
@@ -403,6 +404,10 @@ class Kyo:
         self.searched: list[dict[str, Any]] = []
         self.link_searches = 0
         self.link_seen: dict[str, list[str]] = {}
+        self.env_gap = ENV_GAP
+        self.env_spent = 0.0
+        self.env_count = 0
+        self.env_at = 0.0
 
     def left(self) -> int:
         return self.max_steps - self.step
@@ -412,6 +417,11 @@ class Kyo:
 
     def model_room(self) -> float:
         return TASK_SECONDS - TIME_MARGIN - self.clock()
+
+    def rushed(self) -> bool:
+        """No room for a read the order does not need: that read and the order itself, at this run's store speed, must end inside the margin."""
+        pace = self.env_spent / self.env_count if self.env_count else 1.0
+        return self.model_room() <= 2 * max(pace, 1.0)
 
     def msgs_free(self) -> int:
         return self.msg_limit - self.msg_used - max(0, self.reserve - self.gate_msgs)
@@ -522,8 +532,15 @@ class Kyo:
         payload = dict(self.binding)
         payload['step'] = self.step + 1
         payload['action'] = {'name': name, 'args': args}
+        rest = self.env_at + self.env_gap - time.monotonic()
+        if rest > 0:
+            time.sleep(rest)
+        self.env_at = time.monotonic()
         for _ in range(4):
+            began = time.monotonic()
             result = _env.post_verbose('/environment/call', payload)
+            self.env_spent += time.monotonic() - began
+            self.env_count += 1
             if isinstance(result.data, dict):
                 data = result.data
                 self.step = data['step'] if isinstance(data.get('step'), int) else self.step + 1
@@ -2196,13 +2213,13 @@ class Kyo:
             return ''
         since = max(self.step - 2, self.refused_at)
         stale = [i for i in self.cart_ids() if self.offer_seen.get(i, -99) < since and i not in self.gone]
-        if not stale or self.left() < len(stale) + 3:
+        if not stale or self.left() < len(stale) + 5:
             return ''
         lines = []
         for ident in stale:
             faults: list[str] = []
             args = _shape({target: ident}, self.schemas.get(tool), 'args', faults)
-            if faults:
+            if faults or self.rushed():
                 break
             before = dict(self.rows.get(ident) or {})
             reply = self.act(tool, args)
@@ -2726,7 +2743,7 @@ class Kyo:
                     reread = self.reread_offers()
                     if self.note_sold:
                         self.find_sold()
-                    if self.cart_touched and self.cart_seen_at < self.cart_at and self.roles.get('cart_view') and (self.left() > 3):
+                    if self.cart_touched and self.cart_seen_at < self.cart_at and self.roles.get('cart_view') and (self.left() > 5) and not self.rushed():
                         faults = []
                         view_args = _shape({}, self.schemas.get(self.roles['cart_view']), 'args', faults)
                         view = self.act(self.roles['cart_view'], view_args) if not faults else None
