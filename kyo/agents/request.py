@@ -127,7 +127,9 @@ def read_money(text: str) -> tuple[float | None, str, bool]:
     limit = (
         r"(?:,?\s*(?:for |of )?(?:nothing over|not over|under|below|less than|at most"
         r"|no more than|up to|within|maximum of"
-        r"|max|budget of|budget is|spend(?:ing)?(?: at most)?|cost(?:ing)? (?:at most|under))\s*)"
+        r"|max|budget of|budget is|spend(?:ing)?(?: at most)?|cost(?:ing)? (?:at most|under))\s*"
+        # A bare price ("2 mugs at $15 each") belongs to the amount, not to the product's name.
+        r"|,?\s*\b(?:at|for|costing|priced at)\s+)"
     )
     amount = r"(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)"  # "1,200" is one amount
     patterns = (

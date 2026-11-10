@@ -91,6 +91,13 @@ def test_budget_scope_each():
     assert parse("Buy 2 mugs, each under $5.").budget_scope == "each"
 
 
+@pytest.mark.parametrize("phrase", ["at $15 each", "for $15 each", "costing $15 each"])
+def test_a_bare_price_is_not_part_of_the_product(phrase):
+    brief = parse(f"Buy 2 mugs {phrase}.")
+    assert (brief.budget, brief.budget_scope) == (15, "each")
+    assert [(i.name, i.quantity) for i in brief.items] == [("mugs", 2)]
+
+
 def test_each_elsewhere_in_the_request_leaves_the_budget_a_total():
     brief = parse("Buy 2 red desk lamps under $30. Each one must be red.")
     assert brief.budget == 30 and brief.budget_scope == "total"
