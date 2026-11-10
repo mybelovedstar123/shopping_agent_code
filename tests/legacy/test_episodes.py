@@ -95,5 +95,6 @@ def test_exception_during_a_run_still_returns_the_trace(play, monkeypatch, agent
 
     monkeypatch.setattr(agent.Kyo, "work", explode)
     trace, harness = play([])
-    assert {"kind": "crash", "error": "RuntimeError: boom"} in trace
+    assert [e["error"] for e in trace if e["kind"] == "crash"] == ["RuntimeError: boom"]
+    assert all("at" in event for event in trace), "every event says when it happened"
     assert harness.store_calls == ["decline"], "it still tries to end the episode after a crash"
