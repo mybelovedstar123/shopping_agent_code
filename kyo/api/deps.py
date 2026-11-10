@@ -16,7 +16,11 @@ COOKIE = "kyo_session"
 
 
 def db(request: Request) -> Iterator[Session]:
-    """A database session for one request, committed when the request succeeds."""
+    """A database session for one request, committed when the request succeeds.
+
+    Declare it with scope="function", so the commit happens before the response is sent: a
+    failed commit is then an error reply, not a success that was never saved.
+    """
     with transaction(request.app.state.sessions) as session:
         yield session
 
@@ -32,7 +36,9 @@ def set_login_cookie(request: Request, response: Response, token: str) -> None:
     )
 
 
-def current_user(request: Request, session: Annotated[Session, Depends(db)]) -> User:
+def current_user(
+    request: Request, session: Annotated[Session, Depends(db, scope="function")]
+) -> User:
     user = accounts.user_for_token(session, request.cookies.get(COOKIE))
     if user is None:
         raise HTTPException(401, "Log in first.")

@@ -12,7 +12,7 @@ from ..store import cart
 from .deps import CurrentUser, db
 
 router = APIRouter(tags=["cart"])
-Db = Annotated[Session, Depends(db)]
+Db = Annotated[Session, Depends(db, scope="function")]
 
 
 class Quantity(BaseModel):

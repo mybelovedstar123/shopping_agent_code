@@ -1,9 +1,10 @@
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from kyo.store import cart
 from kyo.store.db import transaction
-from kyo.store.models import AgentRun, User
+from kyo.store.models import AgentRun, Product, User
 
 
 def put(client, sku, quantity):
@@ -27,6 +28,37 @@ def test_add_and_total(shopper):
 def test_setting_a_line_replaces_its_quantity(shopper):
     put(shopper, "L1", 2)
     assert put(shopper, "L1", 3).json()["lines"][0]["quantity"] == 3
+
+
+def test_a_change_that_could_not_be_saved_is_not_reported_as_done(
+    shopper, stocked_app, monkeypatch
+):
+    from sqlalchemy.orm import Session
+
+    def fail(self):
+        raise RuntimeError("the database refused the commit")
+
+    client = TestClient(stocked_app, raise_server_exceptions=False, cookies=shopper.cookies)
+    with monkeypatch.context() as patched:
+        patched.setattr(Session, "commit", fail)
+        reply = put(client, "L1", 2)
+    assert reply.status_code == 500
+    assert shopper.get("/api/cart").json()["lines"] == []
+
+
+def test_a_line_that_stock_no_longer_covers_says_so(shopper, stocked_app):
+    def restock(count):
+        with transaction(stocked_app.state.sessions) as session:
+            session.scalar(select(Product).where(Product.sku == "L1")).stock = count
+
+    put(shopper, "L1", 3)
+    assert shopper.get("/api/cart").json()["lines"][0]["warning"] is None
+    restock(2)
+    line = shopper.get("/api/cart").json()["lines"][0]
+    assert line["stock"] == 2 and line["warning"] == "Only 2 left. Lower the quantity to check out."
+    restock(0)
+    line = shopper.get("/api/cart").json()["lines"][0]
+    assert line["warning"] == "Sold out. Remove it to check out."
 
 
 def test_zero_or_delete_removes_a_line(shopper):

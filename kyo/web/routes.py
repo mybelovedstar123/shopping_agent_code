@@ -22,7 +22,7 @@ STATIC_DIR = HERE / "static"
 templates = Jinja2Templates(directory=HERE / "templates")
 
 
-def load_user(request: Request, session: Annotated[Session, Depends(db)]) -> None:
+def load_user(request: Request, session: Annotated[Session, Depends(db, scope="function")]) -> None:
     """Make the signed-in user, if any, available to every page."""
     request.state.user = accounts.user_for_token(session, request.cookies.get(COOKIE))
 
@@ -32,7 +32,7 @@ router = APIRouter(
     default_response_class=HTMLResponse,
     dependencies=[Depends(verify_csrf), Depends(load_user)],
 )
-Db = Annotated[Session, Depends(db)]
+Db = Annotated[Session, Depends(db, scope="function")]
 PAGE_SIZE = 12
 
 
@@ -252,13 +252,19 @@ def cart_page(request: Request, session: Db) -> HTMLResponse | RedirectResponse:
 
 @router.post("/cart/{sku}", response_model=None)
 def change_cart(
-    request: Request, sku: str, session: Db, quantity: Annotated[str, Form()] = "1"
+    request: Request,
+    sku: str,
+    session: Db,
+    quantity: Annotated[str, Form()] = "1",
+    add: Annotated[str, Form()] = "",
 ) -> HTMLResponse | RedirectResponse:
+    """Set a line's quantity, or with `add`, as the product page sends, add to it."""
     user = request.state.user
     if not user:
         return login_first(request)
+    change = cart.add_to_line if add == "yes" else cart.set_line
     try:
-        cart.set_line(session, user.id, sku, int(quantity))
+        change(session, user.id, sku, int(quantity))
     except ValueError:
         error = "Enter a whole number for the quantity."
     except cart.CartError as refused:
@@ -286,16 +292,21 @@ def pay(
     request: Request,
     card_number: Annotated[str, Form()] = "",
     checkout_key: Annotated[str, Form(max_length=64)] = "",
+    expected_total_cents: Annotated[str, Form()] = "",
 ) -> HTMLResponse | RedirectResponse:
-    """The payment form carries a key, so submitting it twice places one order."""
+    """The payment form carries a key, so submitting it twice places one order, and the total
+    it showed, so the card is never charged a different amount."""
     user = request.state.user
     if not user:
         return login_first(request)
     sessions = request.app.state.sessions
     status = 409
+    expected = int(expected_total_cents) if expected_total_cents.isdigit() else None
     try:
         with transaction(sessions) as session:
-            order = checkout.place_order(session, user.id, card_number, checkout_key or None)
+            order = checkout.place_order(
+                session, user.id, card_number, checkout_key or None, expected_total_cents=expected
+            )
             return redirect(f"/orders/{order.id}?placed=1")
     except payments.PaymentDeclined as declined:
         error, status = str(declined), 402

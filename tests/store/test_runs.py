@@ -126,6 +126,21 @@ def test_purchase_happens_only_after_approving_the_exact_cart(client, app):
     assert stock(app, "M1") == 2
 
 
+def test_the_shoppers_own_checkout_key_cannot_stand_in_for_an_approval(client, app):
+    run_id = start(client, f"Buy a red mug. {NO_QUESTIONS}")
+    question = open_question(wait_until(client, run_id, awaiting("approval")), "approval")
+    client.put("/api/cart/M2", json={"quantity": 1})
+    key = f"run-{run_id}-question-{question['id']}"
+    own = client.post("/api/checkout", json={"card_number": GOOD}, headers={"Idempotency-Key": key})
+    assert own.status_code == 201
+    decision = approve(client, run_id).json()
+    assert decision["approved"] is True and decision["order"]["id"] != own.json()["id"]
+    assert decision["order"]["from_assistant"] is True
+    assert [line["id"] for line in decision["order"]["lines"]] == ["M1"]
+    run = finished(client, run_id)
+    assert run["result"]["order_id"] == decision["order"]["id"] and stock(app, "M1") == 2
+
+
 def test_refusing_means_no_order_and_an_empty_run_cart(client, app):
     run_id = start(client, f"Buy a red mug. {NO_QUESTIONS}")
     approve(client, run_id, approved=False)
@@ -241,6 +256,53 @@ def test_too_many_active_runs_are_refused(client, app):
         approve(client, run_id, approved=False)
 
 
+def test_the_active_run_limit_holds_when_runs_start_at_once(app, client, monkeypatch):
+    import threading
+    from contextlib import contextmanager
+
+    import kyo.store.runs as runs_module
+
+    real = runs_module.transaction
+
+    @contextmanager
+    def slow_adds(sessions):
+        """Hold the window open between counting a shopper's runs and adding one."""
+        with real(sessions) as session:
+            add = session.add
+
+            def slow(row):
+                time.sleep(0.2)
+                add(row)
+
+            session.add = slow
+            yield session
+
+    class Idle(RunManager):
+        def _execute(self, run_id, user_id, request):
+            """Leave the run active, as a team still working would."""
+
+    monkeypatch.setattr(runs_module, "transaction", slow_adds)
+    manager = Idle(app.state.sessions)
+    user_id = client.get("/api/me").json()["id"]
+    barrier = threading.Barrier(5)
+    outcomes = []
+
+    def go():
+        barrier.wait()
+        try:
+            manager.start(user_id, "Buy a mug.")
+            outcomes.append("started")
+        except runs_module.RunError:
+            outcomes.append("refused")
+
+    threads = [threading.Thread(target=go) for _ in range(5)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(30)
+    assert sorted(outcomes) == ["refused"] * 2 + ["started"] * runs_module.MAX_ACTIVE_RUNS
+
+
 def test_runs_require_login(app):
     assert TestClient(app).post("/api/runs", json={"request": "x"}).status_code == 401
 
@@ -269,6 +331,44 @@ def test_unanswered_question_times_out_and_the_run_ends(tmp_path):
     assert run["status"] == "declined" and "in time" in run["result"]["reason"]
     assert orders(app) == 0
     app.state.engine.dispose()
+
+
+def test_an_approval_just_before_the_timeout_is_not_reported_as_unanswered(
+    app, client, monkeypatch
+):
+    """The shopper approves after the run's last poll but before it gives up waiting."""
+    import threading
+
+    import kyo.store.runs as runs_module
+
+    last_poll_done, approved = threading.Event(), threading.Event()
+
+    class Clock:
+        """One poll, then the deadline: the approval lands in the only sleep."""
+
+        now = 0.0
+
+        def monotonic(self):
+            return self.now
+
+        def sleep(self, seconds):
+            last_poll_done.set()
+            approved.wait(10)
+            self.now += seconds
+
+    monkeypatch.setattr(runs_module, "time", Clock())
+    app.state.runs.question_timeout = app.state.runs.poll_seconds = 1.0
+    run_id = start(client, f"Buy a red mug. {NO_QUESTIONS}")
+    assert last_poll_done.wait(10)
+    question = open_question(client.get(f"/api/runs/{run_id}").json(), "approval")
+    url = f"/api/runs/{run_id}/questions/{question['id']}/decision"
+    decision = client.post(url, json={"approved": True, "card_number": GOOD})
+    approved.set()
+    assert decision.status_code == 200
+    app.state.runs.join(run_id)
+    run = client.get(f"/api/runs/{run_id}").json()
+    assert run["status"] == "purchased", run["result"]
+    assert run["result"]["order_id"] == decision.json()["order"]["id"] and orders(app) == 1
 
 
 def test_failure_inside_a_run_is_reported_not_raised(app, client, monkeypatch):

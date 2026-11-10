@@ -66,6 +66,7 @@ def test_session_cookie_is_http_only(client):
         ({"email": "not-an-email"}, "valid email"),
         ({"name": "  "}, "your name"),
         ({"password": "short"}, "at least 8"),
+        ({"password": "p" * 201}, "at most 200"),
     ],
 )
 def test_register_validates_input(client, change, message):

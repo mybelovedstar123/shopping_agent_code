@@ -75,6 +75,58 @@ def test_too_many_is_explained_and_changes_nothing(client, app):
     assert "Your cart is empty" in reply.text
 
 
+def add_from_product_page(client, sku, quantity):
+    """Submit the product page's own "Add to cart" form, with whatever hidden fields it has."""
+    form = re.search(
+        r'<form class="add-to-cart".*?</form>', client.get(f"/product/{sku}").text, re.S
+    )
+    hidden = dict(re.findall(r'type="hidden" name="([^"]+)" value="([^"]*)"', form.group(0)))
+    return post_form(client, f"/cart/{sku}", {**hidden, "quantity": quantity})
+
+
+def quantity_in_cart(page, sku):
+    return int(re.search(rf'id="qty-{sku}"[^>]*value="(\d+)"', page.text).group(1))
+
+
+def test_add_to_cart_adds_to_what_is_already_in_the_cart(client, app):
+    sku, _, price, stock = in_stock(app)
+    register(client)
+    add_from_product_page(client, sku, 1)
+    reply = add_from_product_page(client, sku, 2)
+    assert reply.status_code == 200 and quantity_in_cart(reply, sku) == 3
+    assert f"${price * 3 / 100:.2f}" in text_of(reply)
+    reply = add_from_product_page(client, sku, stock - 2)
+    assert reply.status_code == 422 and f"Only {stock} of {sku} in stock" in reply.text
+    assert quantity_in_cart(reply, sku) == 3, "a refused add changes nothing"
+
+
+def test_the_cart_page_still_sets_the_quantity(client, app):
+    sku = in_stock(app)[0]
+    register(client)
+    add_from_product_page(client, sku, 3)
+    assert quantity_in_cart(add(client, sku, 1), sku) == 1
+
+
+def test_add_to_cart_is_capped_at_the_quantity_limit(client, app):
+    sku = in_stock(app)[0]
+    with transaction(app.state.sessions) as session:
+        session.scalar(select(Product).where(Product.sku == sku)).stock = 500
+    register(client)
+    add(client, sku, 98)
+    reply = add_from_product_page(client, sku, 2)
+    assert reply.status_code == 422 and "Quantity must be between 0 and 99" in reply.text
+
+
+def test_the_cart_page_warns_about_a_line_stock_no_longer_covers(client, app):
+    sku, _, _, _ = in_stock(app)
+    register(client)
+    add(client, sku, 3)
+    assert "left" not in text_of(client.get("/cart"))
+    with transaction(app.state.sessions) as session:
+        session.scalar(select(Product).where(Product.sku == sku)).stock = 1
+    assert "Only 1 left. Lower the quantity to check out." in text_of(client.get("/cart"))
+
+
 def test_invalid_quantity_is_explained(client, app):
     sku = in_stock(app)[0]
     register(client)
@@ -149,3 +201,25 @@ def test_out_of_stock_product_has_no_add_form(client, app):
     with transaction(app.state.sessions) as session:
         session.scalar(select(Product).where(Product.sku == "MUG-0001")).stock = 0
     assert 'action="/cart/MUG-0001"' not in client.get("/product/MUG-0001").text
+
+
+def test_a_price_change_after_the_page_was_shown_is_not_charged(client, app):
+    sku, title, price, stock = in_stock(app)
+    register(client)
+    add(client, sku, 2)
+    page = client.get("/checkout")
+    assert f"Pay ${price * 2 / 100:.2f}" in page.text
+    key = re.search(r'name="checkout_key" value="([^"]+)"', page.text).group(1)
+    shown = re.search(r'name="expected_total_cents" value="([^"]+)"', page.text).group(1)
+    with transaction(app.state.sessions) as session:
+        session.scalar(select(Product).where(Product.sku == sku)).price_cents = price + 100
+    data = {"card_number": GOOD, "checkout_key": key, "expected_total_cents": shown}
+    reply = post_form(client, "/checkout", data)
+    new_total = f"${(price + 100) * 2 / 100:.2f}"
+    assert reply.status_code == 409
+    assert f"The cart total is now {new_total}, not the ${price * 2 / 100:.2f} shown" in reply.text
+    assert f"Pay {new_total}" in reply.text, "the page offers the new total instead"
+    with transaction(app.state.sessions) as session:
+        assert session.query(Order).count() == 0
+        assert session.scalar(select(Product.stock).where(Product.sku == sku)) == stock
+    assert title in client.get("/cart").text

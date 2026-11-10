@@ -11,7 +11,7 @@
   <tbody>
     {% for line in cart.lines %}
     <tr>
-      <td><a href="/product/{{ line.id }}">{{ line.title }}</a></td>
+      <td><a href="/product/{{ line.id }}">{{ line.title }}</a>{% if line.warning %} <span class="stock-out">{{ line.warning }}</span>{% endif %}</td>
       <td class="number">{{ "$%.2f"|format(line.price) }}</td>
       <td>
         <form class="inline" action="/cart/{{ line.id }}" method="post"><input type="hidden" name="csrf_token" value="{{ request.state.csrf_token }}">

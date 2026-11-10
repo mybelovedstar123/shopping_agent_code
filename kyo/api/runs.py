@@ -12,7 +12,7 @@ from ..store import payments, runs
 from .deps import CurrentUser, db
 
 router = APIRouter(tags=["assistant"])
-Db = Annotated[Session, Depends(db)]
+Db = Annotated[Session, Depends(db, scope="function")]
 
 
 class NewRun(BaseModel):

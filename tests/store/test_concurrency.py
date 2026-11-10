@@ -155,3 +155,38 @@ def test_repeats_of_one_checkout_get_one_order_even_in_the_worst_timing(store, s
     results = race([buy(store, user_id, "same-key") for _ in range(2)])
     assert all(isinstance(r, int) for r in results) and len(set(results)) == 1, results
     assert order_count(store) == 1 and stock(store) == 2
+
+
+@pytest.fixture
+def slow_cart_change(monkeypatch):
+    """Hold the window open: every cart change pauses just after reading the cart."""
+    real = cart._lines
+
+    def slow(*args, **kwargs):
+        found = real(*args, **kwargs)
+        time.sleep(0.2)
+        return found
+
+    monkeypatch.setattr(cart, "_lines", slow)
+
+
+def change(sessions, user_id, how, quantity=1):
+    def task():
+        with transaction(sessions) as session:
+            return how(session, user_id, "M1", quantity)["lines"][0]["quantity"]
+
+    return task
+
+
+def test_setting_one_new_line_twice_at_once_makes_one_line(store, slow_cart_change):
+    user_id = shoppers(store, 1)[0]
+    results = race([change(store, user_id, cart.set_line) for _ in range(2)])
+    assert results == [1, 1], results
+
+
+def test_adding_one_product_twice_at_once_adds_both(store, slow_cart_change):
+    user_id = shoppers(store, 1)[0]
+    results = race([change(store, user_id, cart.add_to_line) for _ in range(2)])
+    assert sorted(results) == [1, 2], results
+    with transaction(store) as session:
+        assert cart.view(session, user_id)["lines"][0]["quantity"] == 2

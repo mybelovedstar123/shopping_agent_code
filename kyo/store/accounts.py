@@ -55,8 +55,10 @@ def register(session: Session, email: str, name: str, password: str) -> User:
         raise AccountError("Enter a valid email address.")
     if not name or len(name) > 100:
         raise AccountError("Enter your name.")
-    if not MIN_PASSWORD_LENGTH <= len(password) <= MAX_PASSWORD_LENGTH:
+    if len(password) < MIN_PASSWORD_LENGTH:
         raise AccountError(f"Passwords must be at least {MIN_PASSWORD_LENGTH} characters.")
+    if len(password) > MAX_PASSWORD_LENGTH:
+        raise AccountError(f"Passwords can be at most {MAX_PASSWORD_LENGTH} characters.")
     user = User(email=email, name=name, password_hash=hash_password(password))
     session.add(user)
     try:
@@ -105,6 +107,17 @@ def end_session(session: Session, token: str | None) -> None:
         login = session.get(LoginSession, _token_hash(token))
         if login is not None:
             login.revoked = True
+
+
+def lock_user(session: Session, user_id: int) -> None:
+    """Take a write lock on a user until the transaction ends, so that changes to what the user
+    owns happen one at a time. Any database blocks a second writer to the same row."""
+    session.execute(
+        update(User)
+        .where(User.id == user_id)
+        .values(name=User.name)
+        .execution_options(synchronize_session=False)
+    )
 
 
 def end_all_sessions(session: Session, user_id: int) -> None:
