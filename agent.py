@@ -27,6 +27,7 @@ CHEAPER_SHOWN = 4
 OPEN_LATER = 2
 PAGE_ATTR_CHARS = 700
 PAGE_REST_CHARS = 300
+NO_NAME = ('none', 'null', 'n/a', 'unknown')
 TRAIL_ROOM = 15
 FIT_PAGES = 2
 CRASH_TURNS = 3
@@ -3597,29 +3598,37 @@ class Kyo:
             text += 'The order counts only after every page a requirement points at has been opened in full (a search row is not enough), following each page that refers to a further listing. Still to find and open: ' + ' | '.join(lost[:3]) + ". Search for it by its shop's name together with the values its description gives (the shop's other listings of that kind are not it), open the row of that shop whose page shows those values, apply the value its page gives, then check out."
         return (text, hold)
 
+    def not_maker_keys(self) -> tuple[Any, ...]:
+        """The row keys that cannot hold the name of who sells or makes a listing: its id, its label and its name. Any other
+        text field can, and the value must still appear word for word in the description being matched."""
+        return (self.id_key, self.category_key(), self.title_key())
+
     def shop_rows(self, about: str, ids: list[str]) -> list[str]:
+        not_names = self.not_maker_keys()
         low = about.lower()
         out = []
         for ident in ids:
             row = self.rows.get(ident) or {}
-            names = [str(v).strip() for k, v in row.items() if isinstance(v, str) and 2 < len(v.strip()) <= 40 and re.search('seller|shop|store|vendor|brand|maker|merchant', str(k), re.I)]
+            names = [str(v).strip() for k, v in row.items() if isinstance(v, str) and 2 < len(v.strip()) <= 40 and k not in not_names and v.strip().lower() not in NO_NAME]
             if ident not in self.opened and any((re.search('(?<![a-z0-9])' + re.escape(n.lower()) + '(?![a-z0-9])', low) for n in names)):
                 out.append(ident)
         return out
 
     def opened_shop(self, about: str) -> list[str]:
+        not_names = self.not_maker_keys()
         low = about.lower()
         out = []
         for ident in self.opened:
             row = self.rows.get(ident) or {}
-            names = [str(v).strip() for k, v in row.items() if isinstance(v, str) and 2 < len(v.strip()) <= 40 and re.search('seller|shop|store|vendor|brand|maker|merchant', str(k), re.I)]
+            names = [str(v).strip() for k, v in row.items() if isinstance(v, str) and 2 < len(v.strip()) <= 40 and k not in not_names and v.strip().lower() not in NO_NAME]
             if any((re.search('(?<![a-z0-9])' + re.escape(n.lower()) + '(?![a-z0-9])', low) for n in names)):
                 out.append(ident)
         return out
 
     def find_link(self, about: str, words: str) -> list[str]:
+        not_names = self.not_maker_keys()
         known: list[str] = []
-        named = {w for ident in self.shop_rows(about, list(self.rows)) + self.opened_shop(about) for k, v in (self.rows.get(ident) or {}).items() if isinstance(v, str) and len(v.strip()) <= 40 and re.search('seller|shop|store|vendor|brand|maker|merchant', str(k), re.I) for w in re.findall('[a-z0-9]{3,}', v.lower())}
+        named = {w for ident in self.shop_rows(about, list(self.rows)) + self.opened_shop(about) for k, v in (self.rows.get(ident) or {}).items() if isinstance(v, str) and len(v.strip()) <= 40 and k not in not_names and v.strip().lower() not in NO_NAME for w in re.findall('[a-z0-9]{3,}', v.lower())}
         values = {w for w in re.findall('[a-z0-9]+', (words or about).lower()) if len(w) >= 3 or w.isdigit()} - named - {'the', 'and', 'with', 'from', 'that', 'comes', 'listing', 'page', 'its', 'for', 'of'}
         for ident in self.opened_shop(about):
             stack, leaves = ([self.full.get(ident) or self.rows.get(ident) or {}], [])
@@ -3633,24 +3642,28 @@ class Kyo:
             if values and all((re.search('(?<![a-z0-9])' + re.escape(v) + '(?![a-z0-9])', text) for v in values)):
                 self.trace.append({'kind': 'link_known', 'id': ident})
                 return []
-        plan = self.search_template()
+        plan = self.value_template()
         memo = ' '.join(words.lower().split())
         if memo and memo in self.link_seen:
-            self.link_searches += 1
             known = self.shop_rows(about, self.link_seen[memo])
         elif plan and words:
             tool, base, field = plan
-            faults: list[str] = []
-            args = _shape({**base, field: words}, self.schemas.get(tool), 'args', faults)
-            if not faults:
+            for query in dict.fromkeys((words, ' '.join(words.split()[:2]))):
+                faults: list[str] = []
+                args = _shape({**base, field: query}, self.schemas.get(tool), 'args', faults)
+                if faults:
+                    break
                 self.link_searches += 1
                 reply = self.act(tool, args)
-                if reply is not None:
-                    observation = reply.get('observation')
-                    self.observe(tool, observation)
-                    self.link_seen[memo] = [i for i, _ in self.records_in(observation)]
-                    known = self.shop_rows(about, self.link_seen[memo])
-                    self.trace.append({'kind': 'link_search', 'words': words[:80], 'rows': known[:4]})
+                if reply is None:
+                    break
+                observation = reply.get('observation')
+                self.observe(tool, observation)
+                self.link_seen[memo] = [i for i, _ in self.records_in(observation)]
+                known = self.shop_rows(about, self.link_seen[memo])
+                self.trace.append({'kind': 'link_search', 'words': query[:80], 'rows': known[:4]})
+                if self.link_seen[memo]:
+                    break
         kind = {w for w in re.findall('[a-z0-9]{3,}', (words or about).lower())} - named - {'the', 'and', 'with', 'from', 'that', 'comes', 'listing', 'page', 'its', 'for'}
 
         def of_kind(ids: list[str]) -> list[str]:
