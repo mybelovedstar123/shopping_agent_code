@@ -15,6 +15,8 @@ SPEND_HARD = 0.078
 HEAVY_ROOM = 0.02
 WAITS = (4, 10, 20, 35)
 WAIT_TOTAL = 45
+BRIEF_BY = 120.0
+BRIEF_GAP = 10.0
 SHOW_CHARS = 450
 ENV_GAP = 0.25
 STOCK_OUT = '^(?:no|none|false|0|n)$|out[ _-]?of[ _-]?stock|sold[ _-]?out|unavailable|not[ _-]?available'
@@ -591,6 +593,11 @@ class Kyo:
             again = self.ask_json(prompt, [HEAVY], 2500) or {}
             if _items(again.get('items')) and isinstance(again.get('roles'), dict) and again['roles'].get('buy'):
                 brief = again
+        while not brief and not self.no_credit and self.calls < ALL_CALLS and self.clock() < BRIEF_BY:
+            time.sleep(BRIEF_GAP)
+            brief = self.ask_json(prompt, [LIGHT, HEAVY], 2500) or {}
+        if brief:
+            self.waited = 0
         self.brief = brief
         roles = brief.get('roles') if isinstance(brief.get('roles'), dict) else {}
         self.roles = {k: v for k, v in roles.items() if isinstance(v, str) and v in self.schemas}
