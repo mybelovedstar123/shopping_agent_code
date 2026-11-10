@@ -13,7 +13,7 @@ from ..store.models import User
 from .deps import COOKIE, CurrentUser, db, set_login_cookie
 
 router = APIRouter(tags=["accounts"])
-Db = Annotated[Session, Depends(db)]
+Db = Annotated[Session, Depends(db, scope="function")]
 
 
 class Registration(BaseModel):

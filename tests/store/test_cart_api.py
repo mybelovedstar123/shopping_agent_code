@@ -29,6 +29,22 @@ def test_setting_a_line_replaces_its_quantity(shopper):
     assert put(shopper, "L1", 3).json()["lines"][0]["quantity"] == 3
 
 
+def test_a_change_that_could_not_be_saved_is_not_reported_as_done(
+    shopper, stocked_app, monkeypatch
+):
+    from sqlalchemy.orm import Session
+
+    def fail(self):
+        raise RuntimeError("the database refused the commit")
+
+    client = TestClient(stocked_app, raise_server_exceptions=False, cookies=shopper.cookies)
+    with monkeypatch.context() as patched:
+        patched.setattr(Session, "commit", fail)
+        reply = put(client, "L1", 2)
+    assert reply.status_code == 500
+    assert shopper.get("/api/cart").json()["lines"] == []
+
+
 def test_zero_or_delete_removes_a_line(shopper):
     put(shopper, "L1", 2)
     assert put(shopper, "L1", 0).json()["lines"] == []

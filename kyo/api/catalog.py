@@ -11,7 +11,7 @@ from ..store import catalog
 from .deps import db
 
 router = APIRouter(tags=["catalog"])
-Db = Annotated[Session, Depends(db)]
+Db = Annotated[Session, Depends(db, scope="function")]
 
 RESERVED = {"q", "category", "min_price", "max_price", "in_stock", "sort", "page", "page_size"}
 

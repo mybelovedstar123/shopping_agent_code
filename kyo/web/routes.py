@@ -22,7 +22,7 @@ STATIC_DIR = HERE / "static"
 templates = Jinja2Templates(directory=HERE / "templates")
 
 
-def load_user(request: Request, session: Annotated[Session, Depends(db)]) -> None:
+def load_user(request: Request, session: Annotated[Session, Depends(db, scope="function")]) -> None:
     """Make the signed-in user, if any, available to every page."""
     request.state.user = accounts.user_for_token(session, request.cookies.get(COOKIE))
 
@@ -32,7 +32,7 @@ router = APIRouter(
     default_response_class=HTMLResponse,
     dependencies=[Depends(verify_csrf), Depends(load_user)],
 )
-Db = Annotated[Session, Depends(db)]
+Db = Annotated[Session, Depends(db, scope="function")]
 PAGE_SIZE = 12
 
 

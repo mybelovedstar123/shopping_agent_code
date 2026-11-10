@@ -46,7 +46,7 @@ def place_order(
 
 
 @router.get("/orders")
-def list_orders(user: CurrentUser, session=Depends(db)) -> list[dict[str, Any]]:  # noqa: B008
+def list_orders(user: CurrentUser, session=Depends(db, scope="function")) -> list[dict[str, Any]]:  # noqa: B008
     return checkout.list_orders(session, user.id)
 
 
@@ -54,7 +54,7 @@ def list_orders(user: CurrentUser, session=Depends(db)) -> list[dict[str, Any]]:
 def get_order(
     order_id: int,
     user: CurrentUser,
-    session=Depends(db),  # noqa: B008
+    session=Depends(db, scope="function"),  # noqa: B008
 ) -> dict[str, Any]:
     found = checkout.get_order(session, user.id, order_id)
     if found is None:
