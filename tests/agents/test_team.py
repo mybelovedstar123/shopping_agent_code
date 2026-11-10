@@ -432,3 +432,20 @@ def test_a_budget_over_a_thousand_dollars_is_read_whole():
     chair = Product("C", "Chair C", "Office Chairs", 350.0, {"colour": "black"})
     result, store = shop("Buy a black office chair under $1,200. Do not ask me anything.", [chair])
     assert result["outcome"] == "purchased" and store.order == {"C": 1}
+
+
+class CappingStore(ScenarioStore):
+    """Quietly holds at most one unit of L1, whatever quantity is asked for."""
+
+    def _update_cart(self, args):
+        result = super()._update_cart(args)
+        if args["product_id"] == "L1" and self.cart.get("L1", 0) > 1:
+            self.cart["L1"] = 1
+            result = self._view_cart({})
+        return result
+
+
+def test_a_cart_that_drifts_from_the_plan_is_noticed():
+    store = CappingStore([lamp("L1"), lamp("L2")])
+    result = run_team("Buy 2 red desk lamps. Do not ask me anything.", store)
+    assert store.order == {"L2": 2} and result["lines"] == {"L2": 2}

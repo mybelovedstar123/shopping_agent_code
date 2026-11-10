@@ -84,6 +84,15 @@ def test_store_refusal_is_reported_and_not_recorded_as_a_line():
     assert reply["lines"] == {}
 
 
+def test_set_notices_when_the_store_cart_differs_from_what_was_asked():
+    agent, context, schema, store = team()
+    agent.on_set({"tool": "update_cart", "schema": schema, "lines": {"A": 1}}, context)
+    store.cart["B"] = 4  # the store adds a line behind the agent's back
+    reply = agent.on_set({"tool": "update_cart", "schema": schema, "lines": {"A": 2}}, context)
+    assert not reply["ok"] and reply["errors"] == ["B: the store's cart holds 4, not 0"]
+    assert reply["lines"] == {"A": 2, "B": 4}, "the store's view becomes the record"
+
+
 def test_sync_believes_the_store_over_its_own_record():
     agent, context, schema, store = team()
     agent.on_set({"tool": "update_cart", "schema": schema, "lines": {"A": 1}}, context)

@@ -87,6 +87,7 @@ class CartAgent(Agent):
             (k for k, v in (calls[0] if calls else {}).items() if isinstance(v, str)), None
         )
         errors = []
+        reply: dict[str, Any] = {}
         for args in calls:
             reply = context.request("gateway", "call", {"name": tool, "args": args})
             problem = self._problem(reply)
@@ -99,7 +100,34 @@ class CartAgent(Agent):
                 self.lines.pop(ident, None)
             if reply.get("finished"):
                 break
+        if not errors:
+            errors = self._drift(reply.get("observation"), wanted, drop)
         return {"ok": not errors, "errors": errors, "lines": dict(self.lines), "calls": len(calls)}
+
+    def _drift(self, observation: Any, wanted: dict[str, int], drop: list[str]) -> list[str]:
+        """Compare the cart the store showed after the last change with the wanted lines.
+
+        The store is the authority: what it shows becomes the agent's record of the cart.
+        """
+        if not isinstance(observation, dict):
+            return []
+        key = next(
+            (
+                k
+                for k, v in observation.items()
+                if isinstance(v, list) and re.search(r"line|item|cart", str(k), re.I)
+            ),
+            None,
+        )
+        shown = self._read_lines({key: observation[key]}, [*wanted, *drop]) if key else None
+        if shown is None:
+            return []
+        self.lines = shown
+        return [
+            f"{ident}: the store's cart holds {shown.get(ident, 0)}, not {wanted.get(ident, 0)}"
+            for ident in dict.fromkeys([*wanted, *drop, *shown])
+            if shown.get(ident, 0) != wanted.get(ident, 0)
+        ]
 
     @staticmethod
     def _problem(reply: dict[str, Any]) -> str | None:
