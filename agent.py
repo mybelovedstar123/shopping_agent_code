@@ -91,6 +91,16 @@ BLOCK_VALUE = 40
 TAG_TEXT = 20000
 PAIR_KEY = 'name|key|label|attr|prop|field|spec|title|^k$'
 ID_FIELD = '(?:^|[_ -])(?:id|idx|sku|pid|ref|asin|ident\\w*)(?:$|[_ -])|^id(?-i:[A-Z0-9])|(?-i:Ident)|(?<![a-z])(?!(?:paid|valid|grid|solid|rigid|fluid|liquid|hybrid|rapid|void|acid|humid|android|said|laid)$)[a-z]*id$'
+FAIL_KEY = 'error|fail|(?<!de)fault|trouble(?!shoot)|denied|refus|invalid'
+
+def _failed(observation: Any) -> bool:
+    """Whether a result only reports that the call failed: a small object with a key saying so, or one bare code."""
+    if not isinstance(observation, dict) or not 0 < len(observation) <= 3:
+        return False
+    if any((value and re.search(FAIL_KEY, str(key), re.I) for key, value in observation.items())):
+        return True
+    only = next(iter(observation.values()))
+    return len(observation) == 1 and isinstance(only, str) and 0 < len(only) <= 40 and ' ' not in only
 
 def _plain(text: str) -> Any:
     """A field's text as the value a structured result would hold: a boolean, nothing, a number, else the text."""
@@ -735,6 +745,7 @@ class Kyo:
         self.verdicts: dict[str, bool] = {}
         self.confirmed: str | None = None
         self.completed = False
+        self.factless: set[tuple[str, str]] = set()
         self.id_key: str | None = None
         self.facts_from: dict[str, bool] = {}
         self.queued: list[str] = []
@@ -743,6 +754,7 @@ class Kyo:
         self.recent: list[str] = []
         self.chat: list[dict[str, Any]] = []
         self.opened: set[str] = set()
+        self.views: dict[str, set[str]] = {}
         self.refs: list[tuple[int, str]] = []
         self.ref_values: dict[str, str] = {}
         self.trails = 0
@@ -769,8 +781,12 @@ class Kyo:
         self.env_gap = ENV_GAP
         self.env_spent = 0.0
         self.env_count = 0
+        self.read_calls: dict[str, Any] = {}
+        self.read_args: dict[str, tuple[str, dict[str, Any]]] = {}
         self.row_keys: set[str] = set()
         self.env_at = 0.0
+        self.page_args: dict[str, str] = {}
+        self.page_queries: dict[str, set[str]] = {}
 
     def left(self) -> int:
         return self.max_steps - self.step
@@ -912,9 +928,16 @@ class Kyo:
                 if name != self.roles.get('ask'):
                     data['observation'] = self.unspelled(name, data.get('observation'))
                 seen = data.get('observation')
-                if name in self.page_tools() and (not (isinstance(seen, dict) and seen.get('error'))):
+                self.note_read(name, args, seen)
+                if name == self.facts_tool() and isinstance(seen, dict) and not _failed(seen) and self.ident(seen) and not _fact_block(seen):
+                    self.factless.add((name, self.ident(seen)))
+                if name in self.page_tools() and (not (isinstance(seen, dict) and seen.get('error'))) and not _failed(seen):
+                    shown = _dump(seen)
                     for value in args.values():
-                        self.opened.update((v.strip() for v in (value if isinstance(value, list) else [value]) if isinstance(v, str)))
+                        named = [v.strip() for v in (value if isinstance(value, list) else [value]) if isinstance(v, str) and (not isinstance(value, list) or v.strip() in shown)]
+                        self.opened.update(named)
+                        for ident in named:
+                            self.views.setdefault(ident, set()).add(name)
                 return data
             error = result.error or {}
             status = error.get('status')
@@ -1585,6 +1608,35 @@ class Kyo:
             pool.sort(key=lambda i: self.price_of(i) or 0.0)
             picks += [i for i in pool[:2] if i not in picks]
         return self.fill_facts(picks[:CHEAPER_OPENS], self.tail() + 4)
+
+    def call_mark(self, name: str, args: dict[str, Any]) -> str:
+        """One spelling per call: words in any case and spacing, a number at its first value left out."""
+        props = (self.schemas.get(name) or {}).get('properties') or {}
+        kept: dict[str, Any] = {}
+        for key, value in sorted(args.items()):
+            spec = props.get(key) if isinstance(props.get(key), dict) else {}
+            first = value in (spec.get('minimum'), spec.get('default')) or (value == 1 and key == self.page_args.get(name) and spec.get('minimum') is None and spec.get('default') is None)
+            if isinstance(value, int) and not isinstance(value, bool) and first:
+                continue
+            kept[key] = ' '.join(value.lower().split()) if isinstance(value, str) else value
+        return name + _dump(kept)
+
+    def note_read(self, name: str, args: dict[str, Any], seen: Any) -> None:
+        """Remember what a search or listing call showed, whoever made it."""
+        if name in self.page_tools() or name in {self.roles.get(r) for r in ('ask', 'cart', 'cart_view', 'buy', 'refuse')}:
+            return
+        self.query_is_new(name, args)
+        if isinstance(seen, (dict, list)) and not _failed(seen):
+            self.read_calls[self.call_mark(name, args)] = seen
+            self.read_args[self.call_mark(name, args)] = (name, dict(args))
+
+    def query_is_new(self, name: str, args: dict[str, Any]) -> bool:
+        """Whether this search (its arguments apart from numbers) is the first of its kind, and remember it."""
+        mark = _dump({k: v for k, v in args.items() if isinstance(v, bool) or not isinstance(v, int)})
+        seen = self.page_queries.setdefault(name, set())
+        fresh = mark not in seen
+        seen.add(mark)
+        return fresh
 
     def observe(self, name: str, observation: Any) -> str:
         self.absorb(observation)
