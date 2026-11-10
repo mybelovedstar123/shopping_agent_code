@@ -3791,6 +3791,59 @@ class Kyo:
             return ''
         return 'lowest whole sets seen, requirements not yet checked: ' + '; '.join((f"{' + '.join(p)} = {t:g}" for t, p in options[:SET_SHOWN]))
 
+    def missing_items(self) -> list[int]:
+        """Items with no line in a cart holding fewer lines than items; items no seen listing is labelled for are not counted."""
+        cat_key = self.category_key()
+        ids = [i for i in self.cart_ids() if (self.held_units(i) or 0) > 0]
+        if not cat_key or len(ids) >= len(self.items):
+            return []
+        labels = [str(r.get(cat_key) or '') for r in self.rows.values()]
+        held = [str((self.rows.get(i) or {}).get(cat_key) or '') for i in ids]
+        return [n for n, item in enumerate(self.items, 1) if any((self.owns(item, label) for label in labels)) and (not any((self.owns(item, label) for label in held)))]
+
+    def states_needs(self, ident: str, number: int) -> bool:
+        """Whether a listing's attributes state each of the item's requirements word for word; a limit or an exclusion is
+        not read here and counts as not stated."""
+        block = _fact_block(self.full.get(ident) or {}) or {}
+        for owner, need in self.needs_now():
+            if owner != number:
+                continue
+            prop, _, value = need.partition(':')
+            split = lambda text: set(re.sub('[,/;|]', ' ', _words(text)).split())
+            words = split(value)
+            if not words or words & {'not', 'no', 'least', 'most', 'under', 'over', 'unlike', 'different', 'min', 'max', 'minimum', 'maximum'}:
+                return False
+            if not any((_names(_spelled(prop), _spelled(k)) and words <= split(str(v)) for k, v in block.items())):
+                return False
+        return True
+
+    def fill_short_cart(self) -> bool:
+        """Before a forced order: add, for each item with no line, the cheapest opened listing that states its requirements.
+        False when an item stays uncovered, so the episode ends by refusing rather than with a short order."""
+        cart = self.roles.get('cart') or ''
+        bound = {n for pair in self.bound for n in pair}
+        for number in self.missing_items():
+            item = self.items[number - 1]
+            fits = [i for i in self.item_ids(number) if i in self.full and i not in self.cart_lines and self.buyable(i) and self.price_of(i) is not None and self.states_needs(i, number)]
+            fits.sort(key=lambda i: self.price_of(i) or 0.0)
+            pick = fits[0] if fits and number not in bound else None
+            if pick and isinstance(self.budget, (int, float)):
+                held = sum(((self.price_of(i) or 0.0) * (self.held_units(i) or 0) for i in self.cart_ids()))
+                cost = (self.price_of(pick) or 0.0) * (1 if self.brief.get('budget_scope') == 'each' else item.qty)
+                if cost + (0.0 if self.brief.get('budget_scope') == 'each' else held) > self.budget + 1e-09:
+                    pick = None
+            calls = self.cart_calls({**{i: self.cart_lines[i] for i in self.cart_ids() if i in self.cart_lines}, pick: item.qty}, []) if pick else None
+            if not calls or len(calls) + 1 > self.left():
+                return False
+            for args in calls:
+                faults: list[str] = []
+                args = _shape(args, self.schemas.get(cart), 'args', faults)
+                if faults or self.act(cart, args) is None:
+                    return False
+                self.note_cart(cart, args)
+            self.trace.append({'kind': 'filled_line', 'item': number, 'line': pick})
+        return True
+
     def part_shelves(self) -> None:
         """An item that shares its shelf with another requested item takes the store label that is its own name, when one is seen
         and no item holds it yet."""
@@ -4903,13 +4956,32 @@ class Kyo:
             out.append((cid, text))
         return out
 
+    def can_refuse(self) -> bool:
+        refuse = self.roles.get('refuse')
+        if not refuse:
+            return False
+        faults: list[str] = []
+        _shape(self.quiet(refuse, dict(self.brief.get('refuse_args') or {})), self.schemas.get(refuse), 'args', faults)
+        return not faults
+
     def finish(self, again: bool=False) -> str:
         if self.finished or self.broke or self.left() <= 0:
             return ''
         buy, refuse = (self.roles.get('buy'), self.roles.get('refuse'))
         fresh = self.cart_view is not None and self.cart_seen_at >= self.cart_at
         holding = bool(self.cart_ids()) if fresh else bool(self.cart_lines)
-        if buy and (holding or (self.cart_touched and (not fresh) and (self.left() >= 2))):
+        whole = True
+        if holding and len(self.items) >= 2:
+            whole = self.fill_short_cart() or not self.can_refuse()
+            if whole and len(self.cart_ids()) >= 2:
+                self.fill_facts(self.cart_ids(), self.tail())
+                if self.left() >= 3 and self.model_room() > 5:
+                    self.show_links(self.cart_ids(), self.tail())
+            if not whole:
+                self.trace.append({'kind': 'short_cart_refused', 'lines': self.cart_ids()})
+        if self.finished or self.left() <= 0:
+            return ''
+        if whole and buy and (holding or (self.cart_touched and (not fresh) and (self.left() >= 2))):
             faults: list[str] = []
             args = _shape(dict(self.brief.get('buy_args') or {}), self.schemas.get(buy), 'args', faults)
             if not faults:
