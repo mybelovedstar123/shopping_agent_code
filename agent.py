@@ -20,6 +20,7 @@ BRIEF_GAP = 10.0
 OUTAGE_BY = 150.0
 SHOW_CHARS = 450
 ENV_GAP = 0.25
+TABLE_KEYS = 18
 CRASH_TURNS = 3
 STOCK_OUT = '^(?:no|none|false|0|n)$|out[ _-]?of[ _-]?stock|sold[ _-]?out|unavailable|not[ _-]?available'
 OBS_LIMIT = 15000
@@ -1281,10 +1282,11 @@ class Kyo:
                 if not name or name in done:
                     continue
                 done.add(name)
-                slot = group['keys'].setdefault(name, {'n': 0, 'values': [], 'per': {}})
+                slot = group['keys'].setdefault(name, {'n': 0, 'values': [], 'per': {}, 'plain': {}})
                 slot['n'] += 1
                 text = str(value).strip().lower()
                 slot['per'][ident] = text
+                slot['plain'][ident] = _FIRST_SPELLING.get(str(value).strip(), text).strip().lower()
                 if text not in slot['values']:
                     slot['values'].append(text)
         wanted = [(_words(item.shelf or ''), _words(item.name), {w for w in _stem(item.shelf or '') | _stem(item.name) if len(w) >= 4}) for item in self.items]
@@ -1295,7 +1297,7 @@ class Kyo:
         for label, group in sorted(groups.items(), key=lambda kv: -kv[1]['n']):
             kept: list[tuple[str, dict[str, Any]]] = []
             for name, slot in sorted(group['keys'].items(), key=lambda kv: (-kv[1]['n'], len(kv[0]))):
-                values = list(slot['per'].values())
+                values = list(slot['plain'].values())
                 if not values:
                     continue
                 mean = sum((len(v) for v in values)) / len(values)
@@ -1308,13 +1310,14 @@ class Kyo:
                 if twin is not None:
                     for ident, text in slot['per'].items():
                         twin['per'].setdefault(ident, text)
+                        twin['plain'].setdefault(ident, slot['plain'][ident])
                         if text not in twin['values']:
                             twin['values'].append(text)
                     twin['n'] = len(twin['per'])
                     continue
                 kept.append((name, slot))
             kept.sort(key=lambda kv: -kv[1]['n'])
-            for name, slot in kept[:14]:
+            for name, slot in kept[:TABLE_KEYS]:
                 table.append((label, name, slot['n'], [v[:40] for v in slot['values'][:4]]))
         return table
 
@@ -1342,8 +1345,8 @@ class Kyo:
             wx, wy = (re.findall('[a-z0-9]+', x.lower()), re.findall('[a-z0-9]+', y.lower()))
             short, long = (wx, wy) if len(wx) <= len(wy) else (wy, wx)
             return x == y or (bool(short) and set(short) <= set(long) and (len(long) <= 2 * len(short) + 2))
-        both = [i for i in spec['per'] if i in slot['per'] and spec['per'][i].strip() and slot['per'][i].strip()]
-        same = sum((1 for i in both if agree(spec['per'][i], slot['per'][i])))
+        both = [i for i in spec['plain'] if i in slot['plain'] and spec['plain'][i].strip() and slot['plain'][i].strip()]
+        same = sum((1 for i in both if agree(spec['plain'][i], slot['plain'][i])))
         if not (a <= b or b <= a):
             return len(both) >= 2 and same == len(both)
         if both:
