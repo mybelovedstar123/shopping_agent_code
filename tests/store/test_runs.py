@@ -241,6 +241,53 @@ def test_too_many_active_runs_are_refused(client, app):
         approve(client, run_id, approved=False)
 
 
+def test_the_active_run_limit_holds_when_runs_start_at_once(app, client, monkeypatch):
+    import threading
+    from contextlib import contextmanager
+
+    import kyo.store.runs as runs_module
+
+    real = runs_module.transaction
+
+    @contextmanager
+    def slow_adds(sessions):
+        """Hold the window open between counting a shopper's runs and adding one."""
+        with real(sessions) as session:
+            add = session.add
+
+            def slow(row):
+                time.sleep(0.2)
+                add(row)
+
+            session.add = slow
+            yield session
+
+    class Idle(RunManager):
+        def _execute(self, run_id, user_id, request):
+            """Leave the run active, as a team still working would."""
+
+    monkeypatch.setattr(runs_module, "transaction", slow_adds)
+    manager = Idle(app.state.sessions)
+    user_id = client.get("/api/me").json()["id"]
+    barrier = threading.Barrier(5)
+    outcomes = []
+
+    def go():
+        barrier.wait()
+        try:
+            manager.start(user_id, "Buy a mug.")
+            outcomes.append("started")
+        except runs_module.RunError:
+            outcomes.append("refused")
+
+    threads = [threading.Thread(target=go) for _ in range(5)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(30)
+    assert sorted(outcomes) == ["refused"] * 2 + ["started"] * runs_module.MAX_ACTIVE_RUNS
+
+
 def test_runs_require_login(app):
     assert TestClient(app).post("/api/runs", json={"request": "x"}).status_code == 401
 

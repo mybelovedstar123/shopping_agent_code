@@ -15,7 +15,7 @@ from ..logs import log, scrub
 from ..models.base import Model
 from ..runtime.trace import Trace
 from ..team import run_team
-from . import cart, checkout, payments
+from . import accounts, cart, checkout, payments
 from .catalog import to_dollars
 from .db import now, transaction
 from .models import AgentEvent, AgentQuestion, AgentRun
@@ -91,6 +91,8 @@ class RunManager:
         if len(request) > MAX_REQUEST_LENGTH:
             raise RunError(f"Requests can be at most {MAX_REQUEST_LENGTH} characters.")
         with transaction(self.sessions) as session:
+            # Locked, so runs started at the same moment are counted one at a time.
+            accounts.lock_user(session, user_id)
             active = session.scalar(
                 select(func.count())
                 .select_from(AgentRun)
