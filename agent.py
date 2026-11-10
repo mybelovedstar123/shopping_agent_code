@@ -21,6 +21,7 @@ OUTAGE_BY = 150.0
 SHOW_CHARS = 450
 ENV_GAP = 0.25
 TABLE_KEYS = 18
+CHEAPER_SHOWN = 4
 CRASH_TURNS = 3
 SHORT_KEEP = 8
 STOCK_OUT = '^(?:no|none|false|0|n)$|out[ _-]?of[ _-]?stock|sold[ _-]?out|unavailable|not[ _-]?available'
@@ -38,7 +39,15 @@ ASK_BY = 165.0
 WIND_DOWN = 200.0
 LAST_TURN = 255.0
 EMPTY_ROOM = 12.0
+CAP_ARG = '(?:^|_)(?:cap|max|maximum|ceiling|under|up_?to)(?:_|$)'
+CAP_NOT = 'result|row|page|count|size|num|item|step'
+CAP_PRICED = 'price|cost|budget|spend|money|amount'  # a limit argument's name, when no search has shown one holding yet
+CAP_LOW = '(?:^|_)(?:min|minimum|low|lowest|least|from|start|offset|floor)(?:_|$)'
+CAP_CHANCE = 0.05  # how rarely rows drawn at random from their labels would all sit under a value, for that value to count as a limit held
+WALK_ROOM = 10  # steps beyond the finish a walk listing after the first needs: a refusal at the next checkout still needs a swap
+WALK_CALLS = 4  # capped shelf listings per cart line at one checkout (race 16: 456 rows on a shelf, 6 a page)
 SHELF_ARG = 'section|department|categor|label|shelf|aisle|(?<!age)(?:^|_)group(?:_name|_label)?$'
+LIST_MODE = 'field|filter|facet|brows|categor|list|structured'
 AMOUNT = '\\d[\\d.,]*\\s*[a-z"\']{1,12}'
 FLOOR = '\\b(?:at least|no (?:less|fewer) than|min(?:imum)?)\\s+(' + AMOUNT + ')\\s*$'
 QUERY_WORDS = '(?:^|_)(?:q|query|search|text|phrase|keywords?|terms?|words?)(?:_|$)|query|phrase|keyword'
@@ -771,6 +780,7 @@ class Kyo:
         self.verdicts: dict[str, bool] = {}
         self.confirmed: str | None = None
         self.completed = False
+        self.capped: set[tuple[str, float]] = set()
         self.factless: set[tuple[str, str]] = set()
         self.id_key: str | None = None
         self.facts_from: dict[str, bool] = {}
@@ -809,6 +819,7 @@ class Kyo:
         self.env_count = 0
         self.read_calls: dict[str, Any] = {}
         self.read_args: dict[str, tuple[str, dict[str, Any]]] = {}
+        self.value_rows: set[str] = set()
         self.row_keys: set[str] = set()
         self.env_at = 0.0
         self.bare_pages: dict[str, int] = {}
@@ -1584,7 +1595,8 @@ class Kyo:
         def priced(key: str) -> bool:
             spec = props.get(key) if isinstance(props.get(key), dict) else {}
             return bool(re.search('price|cost|amount|budget|spend|money', key + ' ' + str(spec.get('description') or ''), re.I))
-        caps = [k for k, v in args.items() if k in props and isinstance(v, (int, float)) and (not isinstance(v, bool)) and re.search('max|most|under|below|limit|cap|upto|up_to', k, re.I) and priced(k)]
+        limits = self.cap_keys(name)
+        caps = [k for k, v in args.items() if k in props and isinstance(v, (int, float)) and (not isinstance(v, bool)) and (re.search('max|most|under|below|limit|cap|upto|up_to', k, re.I) and priced(k) or k in limits[:1] and len(limits) == 1)]
         if not caps or not self.price_key:
             return ''
         caps.sort(key=lambda k: args[k])
@@ -1611,7 +1623,7 @@ class Kyo:
             return ''
         self.wider_held = True
         lines = [f'{i} at {self.price_of(i):g}' for i in self.cart_ids() if self.price_of(i) is not None]
-        return f"Not run yet (no step used). {self.left()} steps are left and the pick is the cheapest. Searches match a listing's title, so a requirement's value (often only in the attributes) finds few of the fitting listings, and rows come in no price order. Before checking out, run a few more searches for each item under other names for the product (its plain one-word name, synonyms, words from fitting titles you have seen) and look only at buyable rows priced below the cart's line" + (f" ({'; '.join(lines)})" if lines else '') + '; read the attributes of the cheapest such rows, swap in any that fits, then check out.'
+        return f"Not run yet (no step used). {self.left()} steps are left and the pick is the cheapest. Searches may read only part of a listing, so a requirement's value finds only some of the fitting listings, and rows come in no price order. Before checking out, run a few more searches for each item under other names for the product (its plain one-word name, synonyms, words from fitting titles you have seen) and look only at buyable rows priced below the cart's line" + (f" ({'; '.join(lines)})" if lines else '') + '; read the attributes of the cheapest such rows, swap in any that fits, then check out.'
 
     def note_facts(self, tool: str, shown: bool) -> None:
         """What a single-listing view showed: it shows attributes once any page had them, and none after two pages without."""
@@ -1687,6 +1699,129 @@ class Kyo:
             self.trace.append({'kind': 'fill_facts', 'n': len(texts)})
         return texts
 
+    def cap_template(self) -> tuple[str, dict[str, Any], str, str] | None:
+        """The listing tool that takes a shelf and a maximum price, with the mode it needs: the mode an earlier listing by
+        shelf used, else the one option naming a listing. None when no tool or mode is clear."""
+        for tool, schema in self.schemas.items():
+            props = (schema or {}).get('properties') or {}
+            caps = self.cap_keys(tool)
+            shelves = [k for k, v in props.items() if isinstance(v, dict) and 'string' in _kinds(v) and 'enum' not in v and re.search(SHELF_ARG, _snake(k), re.I)]
+            if len(caps) != 1 or len(shelves) != 1:
+                continue
+            learned = [(dict(mode), held) for (key, mode), held in self.cap_modes(tool).items() if key == caps[0]]
+            options_args = [k for k, v in props.items() if isinstance(v, dict) and isinstance(v.get('enum'), list) and len(v['enum']) >= 2]
+            single = len(options_args) == 1 and options_args[0] in ((schema or {}).get('required') or [])
+            base: dict[str, Any] = {}
+            for key, spec in props.items():
+                options = spec.get('enum') if isinstance(spec, dict) else None
+                if not isinstance(options, list) or len(options) < 2:
+                    continue
+                pick = next((mode[key] for mode, held in learned if held and key in mode), None)
+                if pick is None:
+                    pick = next((a[key] for a in reversed(self.searched) if shelves[0] in a and key in a and not any(k != shelves[0] and not (isinstance(props.get(k), dict) and 'enum' in props[k]) and isinstance(v, str) and v.strip() and re.search(QUERY_WORDS, _snake(k), re.I) for k, v in a.items())), None)
+                    named = [o for o in options if isinstance(o, str) and re.search(LIST_MODE, o, re.I)]
+                    worded = {a[key] for a in self.searched if key in a and any(isinstance(v, str) and v.strip() and re.search(QUERY_WORDS, _snake(k), re.I) for k, v in a.items())}
+                    unworded = [o for o in options if o not in worded]
+                    pick = pick if pick is not None else named[0] if len(named) == 1 else unworded[0] if single and worded and len(unworded) == 1 else None
+                spoiled = {mode[key] for mode, held in learned if not held and key in mode} if single else set()
+                if spoiled and (pick is None or pick in spoiled):
+                    rest = [o for o in options if o not in spoiled]
+                    pick = rest[0] if len(rest) == 1 else None
+                if pick is None:
+                    return None
+                base[key] = pick
+            return (tool, base, shelves[0], caps[0])
+        return None
+
+    def cap_keys(self, tool: str) -> list[str]:
+        """The numeric arguments of `tool` that may cap a listing's price: those a search has shown holding a limit, else those whose
+        name says a maximum, else those whose name says a price or budget."""
+        props = (self.schemas.get(tool) or {}).get('properties') or {}
+        numbers = [k for k, v in props.items() if isinstance(v, dict) and {'integer', 'number'} & set(_kinds(v)) and not re.search(CAP_NOT, k, re.I) and not re.search(CAP_LOW, _snake(k), re.I)]
+        held = {key for (key, _), ok in self.cap_modes(tool).items() if ok}
+        named = [k for k in numbers if re.search(CAP_ARG, _snake(k), re.I)]
+        priced = [k for k in numbers if re.search(CAP_PRICED, _snake(k), re.I)]
+        for group in ([k for k in numbers if k in held], [k for k in named if k in priced], priced, named):
+            if group:
+                return group
+        return []
+
+    def cap_modes(self, tool: str) -> dict[tuple[str, tuple[tuple[str, Any], ...]], bool]:
+        """What the searches of `tool` so far show of each numeric argument as a price limit, by argument and mode (the call's option
+        arguments): False once a call's rows held one priced above its value; True when a call's rows all sat at or below it and rows drawn
+        at random from the known rows of their labels would rarely have (CAP_CHANCE), so the limit, not the query, kept dearer rows out."""
+        props = (self.schemas.get(tool) or {}).get('properties') or {}
+        cat_key = self.category_key()
+        out: dict[tuple[str, tuple[tuple[str, Any], ...]], bool] = {}
+        prices: dict[str, list[float]] = {}
+        for ident, row in self.rows.items():
+            price = self.price_of(ident)
+            if price is not None:
+                prices.setdefault(str(row.get(cat_key) or '').strip().lower() if cat_key else '', []).append(price)
+        for mark, (name, args) in self.read_args.items():
+            if name != tool:
+                continue
+            rows = [i for i, _ in self.records_in(self.read_calls.get(mark))]
+            shown = [self.price_of(i) for i in rows]
+            if not rows or None in shown:
+                continue
+            mode = tuple(sorted(((k, v) for k, v in args.items() if isinstance(props.get(k), dict) and isinstance(props[k].get('enum'), list) and isinstance(v, (str, int, float)))))
+            labels = {str((self.rows.get(i) or {}).get(cat_key) or '').strip().lower() for i in rows} if cat_key else set()
+            for key, value in args.items():
+                if key not in props or isinstance(value, bool) or not isinstance(value, (int, float)):
+                    continue
+                pool = [p for label in labels for p in prices.get(label, [])]
+                if max(shown) > value:
+                    out[(key, mode)] = False
+                elif out.get((key, mode)) is not False and pool and (sum((p <= value for p in pool)) / len(pool)) ** len(rows) < CAP_CHANCE:
+                    out[(key, mode)] = True
+        return out
+
+    def list_below(self, cart: list[str]) -> None:
+        plan = self.cap_template()
+        cat_key = self.category_key()
+        if not plan or not cat_key:
+            return
+        tool, base, shelf, cap = plan
+        for line in cart:
+            price = self.price_of(line)
+            label = str((self.rows.get(line) or {}).get(cat_key) or '')
+            if price is None or price < 2 or not label or (line, price) in self.capped:
+                continue
+            self.capped.add((line, price))
+            limit = int(price) - 1 if float(price).is_integer() else int(price)
+            tried: set[int] = set()
+            for _ in range(WALK_CALLS):
+                if self.left() <= self.tail() + (WALK_ROOM if tried else 7) or self.finished or self.rushed():
+                    return
+                if limit < 1 or limit in tried:
+                    break
+                tried.add(limit)
+                faults: list[str] = []
+                args = _shape({**base, shelf: label, cap: limit}, self.schemas.get(tool), 'args', faults)
+                if faults:
+                    return
+                reply = self.act(tool, args)
+                if reply is None:
+                    return
+                seen = reply.get('observation')
+                self.observe(tool, seen)
+                rows = self.records_in(seen)
+                self.trace.append({'kind': 'list_below', 'line': line, 'price': price, 'limit': limit, 'rows': len(rows)})
+                page = self.paging(tool, seen)
+                if not rows or any(((self.price_of(i) or 0) > limit for i, _ in rows)) or not page or page[0] <= page[1] or self.price_sorted(seen):
+                    break
+                if page[0] <= 2 * page[1]:
+                    call = _shape({**args, page[2]: page[3]}, self.schemas.get(tool), 'args', faults) if page[3] is not None else None
+                    more = None if faults or call is None or self.left() <= self.tail() + 7 or self.rushed() else self.act(tool, call)
+                    if more is not None:
+                        self.observe(tool, more.get('observation'))
+                    break
+                low = min((p for i, _ in rows for p in [self.price_of(i)] if p is not None), default=None)
+                if low is None:
+                    break
+                limit = int(low) - 1 if float(low).is_integer() else int(low)
+
     def cheaper_rows(self) -> list[str]:
         if self.brief.get('pick') != 'cheapest':
             return []
@@ -1696,7 +1831,9 @@ class Kyo:
             return []
         self.cheaper_marks.add(mark)
         cart = self.cart_ids()
+        self.list_below(cart)
         picks: list[str] = []
+        room = self.compare_room() if self.compare_facts() is True else 0
         for line in cart:
             price = self.price_of(line)
             kind = str((self.rows.get(line) or {}).get(cat_key) or '').strip().lower()
@@ -1704,8 +1841,26 @@ class Kyo:
                 continue
             pool = [i for i in self.seen_order if i not in cart and i not in self.full and self.buyable(i) and (str((self.rows.get(i) or {}).get(cat_key) or '').strip().lower() == kind) and ((self.price_of(i) if self.price_of(i) is not None else float('inf')) < price)]
             pool.sort(key=lambda i: self.price_of(i) or 0.0)
-            picks += [i for i in pool[:2] if i not in picks]
-        return self.fill_facts(picks[:CHEAPER_OPENS], self.tail() + 4)
+            lowest = [i for i in pool if i in self.value_rows][:1]
+            pool = lowest + [i for i in pool if i not in lowest]
+            picks += [i for i in pool[:room or 2] if i not in picks]
+        return self.fill_facts(picks[:room * len(cart) if room else min(6, CHEAPER_OPENS * max(1, len(cart)))], self.tail() + 6)
+
+    @_soft('')
+    def below_cart(self) -> str:
+        """The buyable rows priced below a cart line, of its label, that nobody has read yet."""
+        cat_key = self.category_key()
+        cart = self.cart_ids()
+        lines = []
+        for line in cart:
+            price = self.price_of(line)
+            kind = str((self.rows.get(line) or {}).get(cat_key) or '').strip().lower() if cat_key else ''
+            if price is None or not kind:
+                continue
+            pool = [i for i in self.seen_order if i not in cart and i not in self.full and self.buyable(i) and str((self.rows.get(i) or {}).get(cat_key) or '').strip().lower() == kind and (self.price_of(i) if self.price_of(i) is not None else float('inf')) < price]
+            pool.sort(key=lambda i: self.price_of(i) or 0.0)
+            lines += [f'{i} at {self.price_of(i):g}' for i in pool[:CHEAPER_SHOWN]]
+        return 'Still unread and below a cart line: ' + ', '.join(lines) + '.' if lines else ''
 
     def title_key(self) -> str | None:
         """The row key holding a listing's name: of the short texts most rows carry and few rows share, with more than one word
