@@ -28,6 +28,8 @@ OPEN_LATER = 2
 PAGE_ATTR_CHARS = 700
 PAGE_REST_CHARS = 300
 NO_NAME = ('none', 'null', 'n/a', 'unknown')
+MESSAGE_FIELD = '(?:^|_)(?:texts?|body|messages?|notes?|contents?|questions?|msg|say)(?:_|$)'
+NOT_MESSAGE = '(?:^|_)(?:id|ids|type|format|code|lang|language|kind)$'
 TRAIL_ROOM = 15
 FIT_PAGES = 2
 CRASH_TURNS = 3
@@ -763,6 +765,28 @@ class _Stamped(list):
     def append(self, entry: dict[str, Any]) -> None:
         entry.setdefault('at', round(self.clock(), 1))
         super().append(entry)
+
+def _filler(spec: dict[str, Any]) -> Any:
+    """A value for a required field the agent has nothing to say in; None when the schema gives no safe one."""
+    if isinstance(spec.get('enum'), list) and spec['enum']:
+        return spec['enum'][0]
+    for word in ('const', 'default'):
+        if word in spec:
+            return spec[word]
+    kinds = _kinds(spec)
+    if 'integer' in kinds or 'number' in kinds:
+        return spec['minimum'] if isinstance(spec.get('minimum'), (int, float)) else 1
+    if 'boolean' in kinds:
+        return False
+    return 'question'[:spec.get('maxLength') or 8] if 'string' in kinds else None
+
+def _strings(node: Any) -> list[str]:
+    """The texts a call's arguments hold, at any depth."""
+    if isinstance(node, dict):
+        return [s for v in node.values() for s in _strings(v)]
+    if isinstance(node, list):
+        return [s for v in node for s in _strings(v)]
+    return [node] if isinstance(node, str) else []
 
 class Item:
 
@@ -2529,17 +2553,27 @@ class Kyo:
         name = self.roles.get('ask')
         schema = self.schemas.get(name or '') or {}
         props = schema.get('properties') or {}
-        texts = [k for k, v in props.items() if isinstance(v, dict) and 'string' in _kinds(v) and ('enum' not in v)]
-        target = next((k for k in schema.get('required') or [] if k in texts), None) or (texts[0] if texts else None)
-        if not target:
+        required = schema.get('required') or []
+        texts = [k for k, v in props.items() if isinstance(v, dict) and 'string' in _kinds(v) and 'enum' not in v and 'const' not in v]
+        pool = [k for k in required if k in texts] or texts
+        args: dict[str, Any] = {}
+        if pool:
+            args[max(pool, key=lambda k: (not re.search(NOT_MESSAGE, _snake(k), re.I), bool(re.search(MESSAGE_FIELD, _snake(k), re.I)), props[k].get('maxLength') or 10 ** 6))] = text
+        else:
+            for key, spec in props.items():
+                inner = next((k for k, v in (spec.get('properties') or {}).items() if isinstance(v, dict) and 'string' in _kinds(v)), None) if isinstance(spec, dict) else None
+                if isinstance(spec, dict) and 'array' in _kinds(spec):
+                    args[key] = [text]
+                    break
+                if inner:
+                    args[key] = {inner: text}
+                    break
+        if not args:
             return None
-        args: dict[str, Any] = {target: text}
-        for key in schema.get('required') or []:
+        for key in required:
             if key not in args:
-                spec = props.get(key) or {}
-                if isinstance(spec.get('enum'), list) and spec['enum']:
-                    args[key] = spec['enum'][0]
-                else:
+                args[key] = _filler(props.get(key) or {})
+                if args[key] is None:
                     return None
         faults: list[str] = []
         args = _shape(args, schema, 'args', faults)
@@ -3024,7 +3058,9 @@ class Kyo:
             if faults:
                 break
             if name == self.roles.get('ask'):
-                text = next((v for v in args.values() if isinstance(v, str)), '')
+                text = max(_strings(args), key=len, default='')
+                if not text:
+                    break
                 batch = self.send([(1, '', text)], 1)
                 if not batch:
                     break
@@ -4027,7 +4063,7 @@ class Kyo:
             keep = set(ends) | {self.roles.get('cart'), self.roles.get('cart_view')}
         elif left <= len(self.items) + 5 and self.buys == 0:
             keep = set(ends) | {self.roles.get('cart'), self.roles.get('cart_view'), self.roles.get('offer')}
-        tools = [t for t in self.tools if t['function']['name'] != ask]
+        tools = [t for t in self.tools if t['function']['name'] != ask or self.message_args('x' * 200) is None]
         if keep is not None and ends:
             narrowed = [t for t in tools if t['function']['name'] in keep]
             tools = narrowed or tools
@@ -4197,7 +4233,7 @@ class Kyo:
             if self.finished:
                 out.append((cid, 'Not run: the episode is over.'))
                 continue
-            if name == self.roles.get('ask'):
+            if name == self.roles.get('ask') and self.message_args('x' * 200) is not None:
                 out.append((cid, "Not run (no step used): Kyo's interviewer handles every message to the shopper."))
                 continue
             if name not in self.schemas:
