@@ -155,6 +155,12 @@ def read_money(text: str) -> tuple[float | None, str, bool]:
 def _pick(text: str) -> tuple[str, str]:
     if re.search(r"cheapest|lowest price|least expensive|best price|lowest cost", text, re.I):
         return "cheapest", ""
+    # "the largest mug" names the product, not a measure: the measure is its size.
+    match = re.search(
+        rf"(?<!at )\b(largest|biggest|smallest)\s+(?!(?:{MEASURED})\b)[a-z]", text, re.I
+    )
+    if match:
+        return ("least" if match.group(1).lower() == "smallest" else "most"), "size"
     # "at most" and "at least" set limits, not pick rules.
     match = re.search(
         r"(?<!at )\b(most|highest|largest|biggest)\s+([a-z]+(?: [a-z]+)?)", text, re.I

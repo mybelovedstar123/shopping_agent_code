@@ -118,6 +118,20 @@ def test_pick_rule(text, pick, measure):
     assert (brief.pick, brief.pick_measure) == (pick, measure)
 
 
+@pytest.mark.parametrize(
+    "text, pick",
+    [
+        ("Buy the largest mug.", "most"),
+        ("Buy the biggest mug.", "most"),
+        ("Buy the smallest mug.", "least"),
+    ],
+)
+def test_a_size_word_before_the_product_keeps_the_product(text, pick):
+    brief = parse(text)
+    assert (brief.pick, brief.pick_measure) == (pick, "size")
+    assert [i.name for i in brief.items] == ["mug"]
+
+
 def test_cheapest_is_not_part_of_the_item_name():
     assert parse("Buy the cheapest desk lamp.").items[0].name == "desk lamp"
 
