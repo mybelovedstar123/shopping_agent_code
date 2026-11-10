@@ -903,6 +903,7 @@ class Kyo:
         self.wider_held = False
         self.paged_obs: list[Any] = []
         self.plan_order: list[int] = []
+        self.one_product: set[int] = set()
         self.line_holds = 0
         self.bound: list[tuple[int, int]] = []
         self.fit_holds = 0
@@ -2946,8 +2947,36 @@ class Kyo:
         self.trace.append({'kind': 'plan', 'ask': _clip(plan.get('ask'), 120), 'lanes': {n: v[:8] for n, v in lanes.items()}})
         return lanes
 
+    def name_parts(self, number: int) -> list[str]:
+        """The products an item name joins with "and" or commas when each is a plural noun ("door handles and locks"),
+        else []; a single product named with "and" ("salt and pepper grinder", "usb and lightning cables", "his and
+        hers towels") gives []."""
+        name = self.items[number - 1].name
+        if not re.search('\\band\\b', name, re.I):
+            return []
+        parts = [p.strip() for p in re.split('\\s*(?:,|\\band\\b)\\s*', name, flags=re.I) if p.strip()]
+        return parts if len(parts) >= 2 and all((re.search('[a-z]{3}(?<![su])s$', p, re.I) for p in parts)) else []
+
+    def item_said(self, number: int) -> str:
+        """The item as a question names it. A name joining plural nouns with "and" is asked with "or" (race 13, 10
+        agents: "door handles and locks" drew one-at-a-time in 81 of 155 questions; names joined with "or" in 0 of 50,
+        "dresser or cabinet" disclosing a need in 10 of 28). After a one-at-a-time reply about the item, one of the
+        products its name joins: the one whose head noun most of the item's own rows name outside their category label
+        (with no such rows, the first)."""
+        item = self.items[number - 1]
+        parts = self.name_parts(number)
+        if not parts:
+            return item.name
+        if number not in self.one_product:
+            return re.sub('\\band\\b', 'or', item.name, flags=re.I)
+        cat_key = self.category_key()
+        rows = [row for row in self.rows.values() if not cat_key or self.owns(item, str(row.get(cat_key) or ''))]
+        named = [_roots(' '.join((str(v) for k, v in row.items() if k != cat_key and isinstance(v, str)))) for row in rows]
+        hits = {p: sum((1 for words in named if _roots(p.split()[-1]) & words)) for p in parts}
+        return max(parts, key=lambda p: (hits[p], -parts.index(p)))
+
     def question(self, number: int, label: str, samples: list[str] | None=None) -> str:
-        text = f'What {label} would you like for the {self.items[number - 1].name}'
+        text = f'What {label} would you like for the {self.item_said(number)}'
         return text + (f', for example {samples[0]} or {samples[1]}?' if samples else '?')
 
     def samples(self, number: int, label: str) -> list[str]:
