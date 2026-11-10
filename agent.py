@@ -17,8 +17,10 @@ WAITS = (4, 10, 20, 35)
 WAIT_TOTAL = 45
 BRIEF_BY = 120.0
 BRIEF_GAP = 10.0
+OUTAGE_BY = 150.0
 SHOW_CHARS = 450
 ENV_GAP = 0.25
+CRASH_TURNS = 3
 STOCK_OUT = '^(?:no|none|false|0|n)$|out[ _-]?of[ _-]?stock|sold[ _-]?out|unavailable|not[ _-]?available'
 OBS_LIMIT = 15000
 HISTORY_LIMIT = 150000
@@ -30,6 +32,8 @@ TIME_MARGIN = 20.0
 CALL_FLOOR = 6.0
 ASK_BY = 165.0
 WIND_DOWN = 200.0
+LAST_TURN = 255.0
+EMPTY_ROOM = 12.0
 _llm = ProxyClient(timeout=50, max_retries=1, retry_delay=1)
 _llm_short: dict[int, ProxyClient] = {}
 _env = ProxyClient(timeout=95, max_retries=3, retry_delay=1)
@@ -3017,8 +3021,28 @@ class Kyo:
         return self.trace
 
     def work(self, loop_cap: int, spend_cap: float) -> None:
+        for _ in range(CRASH_TURNS):
+            try:
+                self.turns(loop_cap, spend_cap)
+                return
+            except Exception as exc:
+                self.trace.append({'kind': 'crash', 'error': f'{type(exc).__name__}: {exc}'[:400]})
+                self.answer_open_calls()
+
+    def answer_open_calls(self) -> None:
+        """Give every call of the last model turn a reply, so that the conversation stays one the model can continue."""
+        at = next((n for n in range(len(self.chat) - 1, -1, -1) if self.chat[n].get('tool_calls')), None)
+        if at is None:
+            return
+        done = {m.get('tool_call_id') for m in self.chat[at + 1:]}
+        for call in self.chat[at]['tool_calls']:
+            if call['id'] not in done:
+                self.chat.append({'role': 'tool', 'tool_call_id': call['id'], 'content': 'The call may not have run: something went wrong on the way. Look at the state before you repeat it.'})
+        self.chat.append({'role': 'user', 'content': self.status()})
+
+    def turns(self, loop_cap: int, spend_cap: float) -> None:
         idle = 0
-        while not self.finished and (not self.broke) and (self.left() > 0) and (self.loop_calls < loop_cap) and (self.cost < spend_cap):
+        while not self.finished and (not self.broke) and (self.left() > 0) and (self.loop_calls < loop_cap) and (self.cost < spend_cap) and (self.clock() < LAST_TURN or (not self.cart_ids() and self.model_room() > EMPTY_ROOM)):
             if self.ready_to_ask():
                 summary = self.interview()
                 if summary:
@@ -3029,8 +3053,12 @@ class Kyo:
             message = self.think(self.chat, [LIGHT, SPARE], 3000, self.offered())
             if message is None:
                 self.misses += 1
-                if self.no_credit or self.calls >= ALL_CALLS or self.misses > 2:
+                if self.no_credit or self.calls >= ALL_CALLS:
                     break
+                if self.misses > 2:
+                    if self.clock() >= OUTAGE_BY:
+                        break
+                    time.sleep(BRIEF_GAP)
                 continue
             calls = []
             for number, call in enumerate(message.get('tool_calls') or []):
@@ -3052,7 +3080,7 @@ class Kyo:
                 continue
             idle = 0
             committing = {self.roles.get('cart'), self.roles.get('buy'), self.roles.get('refuse')} - {None}
-            if not self.asked and self.roles.get('ask') and (self.msgs_free() > 0) and any((c['function']['name'] in committing for c in calls)) and (self.left() > 8):
+            if not self.asked and self.roles.get('ask') and (self.msgs_free() > 0) and any((c['function']['name'] in committing for c in calls)) and (self.left() > 8) and (self.clock() <= ASK_BY):
                 self.chat.append({'role': 'assistant', 'content': content or None, 'tool_calls': calls})
                 for call in calls:
                     self.chat.append({'role': 'tool', 'tool_call_id': call['id'], 'content': 'Not run (no step used): the shopper is asked first.'})
@@ -3073,7 +3101,7 @@ def agent_main(problem_data: dict[str, Any]) -> list[dict[str, Any]]:
     except Exception as exc:
         return [{'kind': 'crash', 'error': f'{type(exc).__name__}: {exc}'[:400]}]
     try:
-        return episode.run()
+        return list(episode.run())
     except Exception as exc:
         episode.trace.append({'kind': 'crash', 'error': f'{type(exc).__name__}: {exc}'[:400]})
         try:
@@ -3081,5 +3109,5 @@ def agent_main(problem_data: dict[str, Any]) -> list[dict[str, Any]]:
                 episode.finish()
         except Exception as again:
             episode.trace.append({'kind': 'crash', 'error': f'{type(again).__name__}: {again}'[:400]})
-        return episode.trace
+        return list(episode.trace)
 __all__ = ['agent_main']
