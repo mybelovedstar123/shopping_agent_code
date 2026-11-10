@@ -9,6 +9,7 @@ NAMES = "GUIDE BRIEF PLAN HEAR NOTE CHECK READING AUDIT UNMIX TRAIL GATE SWAP SH
 # behaviour of agent.py that the team does not have, so the team keeps its copy of these.
 REVISED_IN_BASELINE = {
     "BRIEF",
+    "HEAR",
     "TRAIL",
 }
 
