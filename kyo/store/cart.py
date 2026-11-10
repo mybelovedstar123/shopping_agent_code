@@ -50,9 +50,19 @@ def view(session: Session, user_id: int, run_id: int | None = None) -> dict[str,
                 "price": to_dollars(line.product.price_cents),
                 "subtotal": to_dollars(subtotal),
                 "stock": line.product.stock,
+                "warning": _stock_warning(line.quantity, line.product.stock),
             }
         )
     return {"lines": lines, "total": to_dollars(total), "total_cents": total}
+
+
+def _stock_warning(quantity: int, stock: int) -> str | None:
+    """Why a line cannot be bought as it is, now that stock has fallen since it was carted."""
+    if stock == 0:
+        return "Sold out. Remove it to check out."
+    if quantity > stock:
+        return f"Only {stock} left. Lower the quantity to check out."
+    return None
 
 
 def set_line(

@@ -117,6 +117,16 @@ def test_add_to_cart_is_capped_at_the_quantity_limit(client, app):
     assert reply.status_code == 422 and "Quantity must be between 0 and 99" in reply.text
 
 
+def test_the_cart_page_warns_about_a_line_stock_no_longer_covers(client, app):
+    sku, _, _, _ = in_stock(app)
+    register(client)
+    add(client, sku, 3)
+    assert "left" not in text_of(client.get("/cart"))
+    with transaction(app.state.sessions) as session:
+        session.scalar(select(Product).where(Product.sku == sku)).stock = 1
+    assert "Only 1 left. Lower the quantity to check out." in text_of(client.get("/cart"))
+
+
 def test_invalid_quantity_is_explained(client, app):
     sku = in_stock(app)[0]
     register(client)
