@@ -10,6 +10,26 @@ the hours spent on each issue. A release waits if its checks fail.
 
 With version 1.0.0, every issue below is merged.
 
+## How the schedule went
+
+32 of the 41 issues merged within 3 minutes of their scheduled time. The machine
+releasing them restarted unexpectedly three times, and nothing merged until it was running again.
+The other 9 then merged late, oldest first:
+
+| # | Scheduled merge | Merged | Late by | Issue |
+|---|---|---|---|---|
+| 4 | Thu Nov 05, 03:30 CST | Thu Nov 05, 14:01 CST | 10 h 32 min | Add characterization tests for the existing agent |
+| 5 | Thu Nov 05, 06:00 CST | Thu Nov 05, 14:03 CST | 8 h 03 min | Document the target architecture and extract shared prompts |
+| 6 | Thu Nov 05, 08:30 CST | Thu Nov 05, 14:04 CST | 5 h 34 min | Define the message and agent contracts |
+| 7 | Thu Nov 05, 11:00 CST | Thu Nov 05, 14:04 CST | 3 h 05 min | Add a message bus with one mailbox and worker per agent |
+| 8 | Thu Nov 05, 13:30 CST | Thu Nov 05, 14:05 CST | 36 min | Record every agent message in a shared event trace |
+| 15 | Fri Nov 06, 07:00 CST | Fri Nov 06, 08:40 CST | 1 h 41 min | Add the catalog agent |
+| 22 | Sat Nov 07, 00:30 CST | Sat Nov 07, 06:15 CST | 5 h 45 min | Add the store database schema |
+| 23 | Sat Nov 07, 03:00 CST | Sat Nov 07, 06:15 CST | 3 h 16 min | Seed a realistic product catalog |
+| 24 | Sat Nov 07, 05:30 CST | Sat Nov 07, 06:16 CST | 47 min | Add the catalog service and API |
+
+The tables below keep the original schedule.
+
 ## M1 Foundations
 
 Packaging, CI, tests around the existing agent, and the target architecture. Due Thu Nov 05, 06:00 CST.
