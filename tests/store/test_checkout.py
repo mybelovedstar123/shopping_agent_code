@@ -127,3 +127,23 @@ def test_orders_are_listed_newest_first(shopper, stocked_app):
     assert [o["id"] for o in listed] == [second["id"], first["id"]]
     with transaction(stocked_app.state.sessions) as session:
         assert session.query(Order).count() == 2
+
+
+def set_price(app, sku, cents):
+    with transaction(app.state.sessions) as session:
+        session.scalar(select(Product).where(Product.sku == sku)).price_cents = cents
+
+
+def test_a_total_that_changed_since_it_was_shown_is_not_charged(shopper, stocked_app):
+    add(shopper, "L1", 2)
+    shown = shopper.get("/api/cart").json()["total_cents"]
+    set_price(stocked_app, "L1", 4500)
+    reply = shopper.post("/api/checkout", json={"card_number": GOOD, "expected_total_cents": shown})
+    assert reply.status_code == 409
+    assert reply.json()["detail"] == (
+        "The cart total is now $90.00, not the $60.00 shown. Check it and pay again."
+    )
+    assert stock(stocked_app, "L1") == 5 and shopper.get("/api/orders").json() == []
+    assert shopper.get("/api/cart").json()["total_cents"] == 9000
+    reply = shopper.post("/api/checkout", json={"card_number": GOOD, "expected_total_cents": 9000})
+    assert reply.status_code == 201 and reply.json()["total"] == 90.0

@@ -149,3 +149,25 @@ def test_out_of_stock_product_has_no_add_form(client, app):
     with transaction(app.state.sessions) as session:
         session.scalar(select(Product).where(Product.sku == "MUG-0001")).stock = 0
     assert 'action="/cart/MUG-0001"' not in client.get("/product/MUG-0001").text
+
+
+def test_a_price_change_after_the_page_was_shown_is_not_charged(client, app):
+    sku, title, price, stock = in_stock(app)
+    register(client)
+    add(client, sku, 2)
+    page = client.get("/checkout")
+    assert f"Pay ${price * 2 / 100:.2f}" in page.text
+    key = re.search(r'name="checkout_key" value="([^"]+)"', page.text).group(1)
+    shown = re.search(r'name="expected_total_cents" value="([^"]+)"', page.text).group(1)
+    with transaction(app.state.sessions) as session:
+        session.scalar(select(Product).where(Product.sku == sku)).price_cents = price + 100
+    data = {"card_number": GOOD, "checkout_key": key, "expected_total_cents": shown}
+    reply = post_form(client, "/checkout", data)
+    new_total = f"${(price + 100) * 2 / 100:.2f}"
+    assert reply.status_code == 409
+    assert f"The cart total is now {new_total}, not the ${price * 2 / 100:.2f} shown" in reply.text
+    assert f"Pay {new_total}" in reply.text, "the page offers the new total instead"
+    with transaction(app.state.sessions) as session:
+        assert session.query(Order).count() == 0
+        assert session.scalar(select(Product.stock).where(Product.sku == sku)) == stock
+    assert title in client.get("/cart").text

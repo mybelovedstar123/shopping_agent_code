@@ -286,16 +286,21 @@ def pay(
     request: Request,
     card_number: Annotated[str, Form()] = "",
     checkout_key: Annotated[str, Form(max_length=64)] = "",
+    expected_total_cents: Annotated[str, Form()] = "",
 ) -> HTMLResponse | RedirectResponse:
-    """The payment form carries a key, so submitting it twice places one order."""
+    """The payment form carries a key, so submitting it twice places one order, and the total
+    it showed, so the card is never charged a different amount."""
     user = request.state.user
     if not user:
         return login_first(request)
     sessions = request.app.state.sessions
     status = 409
+    expected = int(expected_total_cents) if expected_total_cents.isdigit() else None
     try:
         with transaction(sessions) as session:
-            order = checkout.place_order(session, user.id, card_number, checkout_key or None)
+            order = checkout.place_order(
+                session, user.id, card_number, checkout_key or None, expected_total_cents=expected
+            )
             return redirect(f"/orders/{order.id}?placed=1")
     except payments.PaymentDeclined as declined:
         error, status = str(declined), 402

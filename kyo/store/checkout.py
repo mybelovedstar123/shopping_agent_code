@@ -30,8 +30,8 @@ def place_order(
 
     The caller's transaction must roll back if this raises, which undoes the stock reductions.
     A repeat of the same idempotency key returns the first order without charging again.
-    `expected_total_cents` guards an approval: if the cart no longer costs what was approved,
-    nothing is bought.
+    `expected_total_cents` is the total the shopper saw or approved: if the cart no longer costs
+    that, nothing is bought.
     """
     key = idempotency_key or secrets.token_hex(16)
     # Take a write lock on this user before reading anything. Otherwise two checkouts could both
@@ -55,7 +55,12 @@ def place_order(
         raise CheckoutError("The cart is empty.")
     total = sum(line.product.price_cents * line.quantity for line in lines)
     if expected_total_cents is not None and total != expected_total_cents:
-        raise CheckoutError("The cart has changed since it was approved.")
+        if run_id is not None:
+            raise CheckoutError("The cart has changed since it was approved.")
+        raise CheckoutError(
+            f"The cart total is now ${to_dollars(total):.2f}, not the "
+            f"${to_dollars(expected_total_cents):.2f} shown. Check it and pay again."
+        )
 
     order_lines = []
     for line in lines:
