@@ -3996,7 +3996,14 @@ class Kyo:
         prompt += "\n\nRECORDS OF THE CART'S LISTINGS:\n" + '\n'.join((f'{i}: ' + ('SOLD OUT (the store says it can no longer be bought). ' if self.sold_out(i) else '') + self.record_of(i) for i in ids))
         if self.brief.get('pick') in ('cheapest', 'most', 'least'):
             prompt += '\n\nOTHER LISTINGS SEEN (newest first):\n' + self.others(ids, 15)
-        got = self.ask_json(prompt, self.judges(limit), 3000)
+        judges = self.judges(limit)
+        got = None
+        if len(judges) > 1 and not lead and not self.audited and self.brief.get('pick') not in ('cheapest', 'most', 'least'):
+            got = self.ask_json(prompt, [LIGHT], 3000)
+            if got:
+                judges = [HEAVY] if got.get('ok') is False and HEAVY in self.judges(limit) else []
+        if judges and not self.no_credit:
+            got = self.ask_json(prompt, judges, 3000) or got
         self.trace.append({'kind': 'check', 'cart': ids, 'got': got})
         self.verdicts[key] = bool(got) and got.get('ok') is not False
         if not got or got.get('ok') is not False:
@@ -4268,7 +4275,7 @@ class Kyo:
         prompt = SWAP + '\n\nREQUEST:\n' + self.request + '\n\nREQUIREMENTS IN FORCE:\n' + self.ledger()
         prompt += '\n\nSOLD-OUT CART LINE:\n' + '\n'.join((f'{i}: {self.record_of(i)}' for i in lost)) + '\n\nCART NOW:\n' + self.cart_text()
         prompt += '\n\nOTHER LISTING RECORDS SEEN (newest first):\n' + '\n'.join(records)
-        got = self.ask_json(prompt, self.judges(), 3500)
+        got = self.ask_json(prompt, self.judges()[::-1], 3500)
         fits: list[tuple[float, str]] = []
         for entry in _items((got or {}).get('fits')):
             ident = str(entry.get('id') if isinstance(entry, dict) else entry)
@@ -4298,7 +4305,7 @@ class Kyo:
 
     def audit_call(self) -> dict[str, Any] | None:
         records = []
-        for ident in reversed(self.seen_order):
+        for ident in sorted(reversed(self.seen_order), key=lambda i: i not in self.full):
             if self.sold_out(ident):
                 continue
             record = self.full.get(ident) if ident in self.full else None
@@ -4309,7 +4316,10 @@ class Kyo:
             return None
         prompt = AUDIT + '\n\nREQUEST:\n' + self.request + '\n\nREQUIREMENTS IN FORCE:\n' + self.ledger()
         prompt += '\n\nLISTING RECORDS SEEN (newest first):\n' + '\n'.join(records)
-        got = self.ask_json(prompt, self.judges(), 4000)
+        judges = self.judges()
+        got = self.ask_json(prompt, [LIGHT] if judges else [], 4000)
+        if HEAVY in judges and not self.no_credit and not self.audit_fits(got):
+            got = self.ask_json(prompt, [HEAVY], 4000) or got
         self.trace.append({'kind': 'audit', 'got': got})
         return got
 
