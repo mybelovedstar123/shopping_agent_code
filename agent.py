@@ -23,6 +23,7 @@ ENV_GAP = 0.25
 TABLE_KEYS = 18
 CRASH_TURNS = 3
 STOCK_OUT = '^(?:no|none|false|0|n)$|out[ _-]?of[ _-]?stock|sold[ _-]?out|unavailable|not[ _-]?available'
+TEXT_CHARS = 3000
 OBS_LIMIT = 15000
 HISTORY_LIMIT = 150000
 GATE_ROUNDS = 3
@@ -35,6 +36,8 @@ ASK_BY = 165.0
 WIND_DOWN = 200.0
 LAST_TURN = 255.0
 EMPTY_ROOM = 12.0
+SHELF_ARG = 'section|department|categor|label|shelf|aisle|(?<!age)(?:^|_)group(?:_name|_label)?$'
+QUERY_WORDS = '(?:^|_)(?:q|query|search|text|phrase|keywords?|terms?|words?)(?:_|$)|query|phrase|keyword'
 _llm = ProxyClient(timeout=50, max_retries=1, retry_delay=1)
 _llm_short: dict[int, ProxyClient] = {}
 _env = ProxyClient(timeout=95, max_retries=3, retry_delay=1)
@@ -485,6 +488,9 @@ def _words(key: str) -> str:
     key = re.sub('([a-z0-9])([A-Z])', '\\1 \\2', str(key))
     return re.sub('[\\s_.\\-]+', ' ', key).strip().lower()
 
+def _snake(key: str) -> str:
+    return _words(key).replace(' ', '_')
+
 def _stem(text: str) -> frozenset[str]:
     return frozenset((w[:-1] if len(w) > 3 and w.endswith('s') else w for w in _words(text).split()))
 
@@ -785,6 +791,7 @@ class Kyo:
         self.read_args: dict[str, tuple[str, dict[str, Any]]] = {}
         self.row_keys: set[str] = set()
         self.env_at = 0.0
+        self.bare_pages: dict[str, int] = {}
         self.page_args: dict[str, str] = {}
         self.page_queries: dict[str, set[str]] = {}
 
@@ -1563,15 +1570,63 @@ class Kyo:
         lines = [f'{i} at {self.price_of(i):g}' for i in self.cart_ids() if self.price_of(i) is not None]
         return f"Not run yet (no step used). {self.left()} steps are left and the pick is the cheapest. Searches match a listing's title, so a requirement's value (often only in the attributes) finds few of the fitting listings, and rows come in no price order. Before checking out, run a few more searches for each item under other names for the product (its plain one-word name, synonyms, words from fitting titles you have seen) and look only at buyable rows priced below the cart's line" + (f" ({'; '.join(lines)})" if lines else '') + '; read the attributes of the cheapest such rows, swap in any that fits, then check out.'
 
+    def note_facts(self, tool: str, shown: bool) -> None:
+        """What a single-listing view showed: it shows attributes once any page had them, and none after two pages without."""
+        if shown:
+            self.facts_from[tool] = True
+        elif self.facts_from.get(tool) is not True:
+            self.bare_pages[tool] = self.bare_pages.get(tool, 0) + 1
+            if self.bare_pages[tool] >= 2:
+                self.facts_from[tool] = False
+
+    def lists_things(self, tool: str) -> bool:
+        """Whether a tool lists a shelf or takes search words rather than a listing's id."""
+        target = self.single_target(tool) or ''
+        return bool(re.search(SHELF_ARG, _snake(target), re.I) or re.search(QUERY_WORDS, _snake(target), re.I)) or tool in self.shapes
+
     def fill_facts(self, ids: list[str], keep: int) -> list[str]:
         tool = self.facts_tool()
         target = self.single_target(tool)
-        if not tool or not target:
+        if (not tool or not target) and self.compare_facts() is not True:
             return []
         texts = []
-        for ident in [i for i in ids if i in self.rows and i not in self.full and (not self.sold_out(i))]:
-            if self.left() <= keep or self.finished or self.facts_from.get(tool) is False:
+        wanted = [i for i in ids if i in self.rows and i not in self.full and (not self.sold_out(i))]
+        side = self.roles.get('compare')
+        many = self.compare_target()
+        unread: list[str] = []
+        while side and many and self.compare_facts() is True and len(wanted) >= 2 and self.left() > keep and not self.finished and not self.rushed():
+            room = self.compare_room()
+            batch, wanted = (wanted[:room], wanted[room:])
+            faults_side: list[str] = []
+            args_side = _shape({many: batch}, self.schemas.get(side), 'args', faults_side)
+            if faults_side:
+                wanted = batch + wanted
                 break
+            reply = self.act(side, args_side)
+            if reply is None:
+                wanted = batch + wanted
+                break
+            seen = reply.get('observation')
+            self.observe(side, seen)
+            self.note_view(side, seen)
+            rows = self.records_in(seen)
+            for ident, record in rows:
+                texts.append(f'{ident}: ' + self.show(record)[:1500])
+            if rows:
+                self.compare_ok = max(self.compare_ok, len(rows))
+                unread += [i for i in batch if i not in self.full]
+                continue
+            self.compare_bad = min(self.compare_bad or 999, len(batch))
+            wanted = batch + wanted
+            if self.compare_room() >= len(batch):
+                break
+        if not tool or not target:
+            return texts
+        for ident in unread + wanted:
+            if self.left() <= keep or self.finished or self.facts_from.get(tool) is False or self.rushed():
+                break
+            if (tool, ident) in self.factless:
+                continue
             faults: list[str] = []
             args = _shape({target: ident}, self.schemas.get(tool), 'args', faults)
             if faults:
@@ -1583,7 +1638,7 @@ class Kyo:
             self.observe(tool, seen)
             self.note_view(tool, seen)
             if isinstance(seen, dict) and self.ident(seen):
-                self.facts_from[tool] = self.facts_from.get(tool, False) or bool(_fact_block(seen))
+                self.note_facts(tool, bool(_fact_block(seen)))
             texts.append(f'{ident}: ' + self.show(seen)[:1500])
         if texts:
             self.trace.append({'kind': 'fill_facts', 'n': len(texts)})
@@ -1658,14 +1713,15 @@ class Kyo:
             return
         if self.left() <= 12:
             return
-        cap = props[target].get('maxItems') if isinstance(props[target].get('maxItems'), int) else 4
-        ranked = self.item_groups()
-        share = max(1, cap // max(1, len(ranked)))
+        cap = min(props[target].get('maxItems') if isinstance(props[target].get('maxItems'), int) else 4, self.compare_room())
+        ranked = sorted(self.item_groups(), key=lambda ids: sum((1 for i in ids if i in self.full)))
+        lanes = [[i for i in ids if i not in self.full] for ids in ranked]
         picks: list[str] = []
-        for ids in ranked:
-            picks += [i for i in ids if i not in self.full][:share]
+        for round_of in range(cap):
+            picks += [lane[round_of] for lane in lanes if round_of < len(lane)]
         picks = picks[:cap]
         if len(picks) < 2:
+            self.fill_facts(picks, 12)
             return
         faults: list[str] = []
         args = _shape({target: picks}, schema, 'args', faults)
@@ -1680,6 +1736,9 @@ class Kyo:
             rows = self.records_in(seen)
             if rows:
                 self.facts_from[tool] = self.facts_from.get(tool, False) or any((_fact_block(r) for _, r in rows))
+                self.compare_ok = max(self.compare_ok, len(rows))
+            else:
+                self.compare_bad = min(self.compare_bad or 999, len(picks))
             self.trace.append({'kind': 'widen', 'ids': picks, 'opened': len(self.full) - before})
             if rows and self.facts_from.get(tool) is False:
                 self.widen_singly()
@@ -1691,6 +1750,7 @@ class Kyo:
                     reply = self.act(tool, args)
                     if reply is not None:
                         self.observe(tool, reply.get('observation'))
+                        self.compare_ok = max(self.compare_ok, len(self.records_in(reply.get('observation'))))
 
     def widen_singly(self) -> None:
         tool = self.facts_tool()
@@ -3050,7 +3110,7 @@ class Kyo:
                 self.cart_lines.pop(ident, None)
 
     def show(self, observation: Any) -> str:
-        text = _dump(_clip(observation, SHOW_CHARS))
+        text = _dump(_clip(observation, SHOW_CHARS if self.records_in(observation) else TEXT_CHARS))
         if len(text) > OBS_LIMIT:
             text = text[:OBS_LIMIT] + '...(cut)'
         return text
@@ -3172,7 +3232,7 @@ class Kyo:
             if name in readers and cached and (cached[0] == self.version):
                 out.append((cid, f'Not run (no step used): the same call at step {cached[1]} returned this, and nothing has changed since:\n' + cached[2][:3000]))
                 continue
-            if target and name in readers and (name != self.roles.get('compare')) and self.shown_already(name, str(args.get(target))):
+            if target and name in readers and (name != self.roles.get('compare')) and (self.shown_already(name, str(args.get(target))) or (name, str(args.get(target))) in self.factless):
                 out.append((cid, f'Not run (no step used): {args[target]} has shown everything this view gives since the last change. Its record: ' + self.record_of(str(args[target]))))
                 continue
             if many and isinstance(args.get(many), list) and args[many]:
@@ -3316,12 +3376,12 @@ class Kyo:
             if self.single_target(name) and name not in (self.roles.get('cart'), self.roles.get('buy'), self.roles.get('refuse'), self.roles.get('ask')):
                 listing = self.ident(observation) if isinstance(observation, dict) else None
                 if listing:
-                    self.facts_from[name] = self.facts_from.get(name, False) or bool(_fact_block(observation))
-                    if name == self.roles.get('open') and (not self.facts_from[name]):
-                        other = next((t for t in self.schemas if t != name and self.single_target(t) and (self.facts_from.get(t) is not False) and (t not in (self.roles.get('cart'), self.roles.get('buy'), self.roles.get('refuse'), self.roles.get('ask'), self.roles.get('search')))), None)
+                    self.note_facts(name, bool(_fact_block(observation)))
+                    if name == self.roles.get('open') and (self.facts_from.get(name) is False):
+                        other = next((t for t in self.schemas if t != name and self.single_target(t) and (self.facts_from.get(t) is not False) and (t not in (self.roles.get('cart'), self.roles.get('buy'), self.roles.get('refuse'), self.roles.get('ask'), self.roles.get('search'))) and not self.lists_things(t)), None)
                         if other:
                             self.roles['open'] = other
-                    if not self.facts_from[name] and name != self.roles.get('open') and (not self.roles.get('offer')):
+                    if self.facts_from.get(name) is False and name != self.roles.get('open') and (not self.roles.get('offer')):
                         self.roles['offer'] = name
                     if name == self.offer_tool():
                         self.offer_seen[listing] = self.step
