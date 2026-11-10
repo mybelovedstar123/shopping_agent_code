@@ -77,6 +77,360 @@ def _fit_marks(text: Any) -> dict[str, Any]:
     also = [(hit.group(1).upper(), _codes(hit.group(2))) for hit in re.finditer('\\bpart\\s+(' + PART_CODE + ')\\s+also fits\\s*:?\\s*([^.;]+)', text, re.I)]
     more = re.search('\\b(?:more|details|see|read)\\s+(?:on|at|under|about)?\\s*(?:the\\s+)?part\\s+(' + PART_CODE + ')', text, re.I)
     return {'own': own.group(1).upper() if own else '', 'codes': codes, 'works': works, 'also': also, 'more': more.group(1).upper() if more else ''}
+PAIR_MARKS = (': ', ' = ', '=', ' -> ', ' - ')
+FIELD_MARKS = (' | ', '\n', ' || ', ' ; ', '; ', '\t', ' // ', ' · ', ' • ', '|', ';', ', ')
+FIELD_NAME = "[A-Za-z][A-Za-z0-9_ ./&'()-]{0,38}"
+LIST_BULLET = '^\\s*(?:[-*•·]|\\d{1,3}[.)])\\s+'
+RECORD_FIELDS = 3
+NOTE_FIELDS = 5
+FIELD_SHARE = 0.15
+PAIR_SHARE = 0.7
+BLOCK_NAME = 60
+BLOCK_VALUE = 40
+TAG_TEXT = 20000
+PAIR_KEY = 'name|key|label|attr|prop|field|spec|title|^k$'
+ID_FIELD = '(?:^|[_ -])(?:id|idx|sku|pid|ref|asin|ident\\w*)(?:$|[_ -])|^id(?-i:[A-Z0-9])|(?-i:Ident)|(?<![a-z])(?!(?:paid|valid|grid|solid|rigid|fluid|liquid|hybrid|rapid|void|acid|humid|android|said|laid)$)[a-z]*id$'
+
+def _plain(text: str) -> Any:
+    """A field's text as the value a structured result would hold: a boolean, nothing, a number, else the text."""
+    bare = text.strip()
+    low = bare.lower()
+    if low in ('true', 'false'):
+        return low == 'true'
+    if low in ('none', 'null', ''):
+        return None
+    money = re.fullmatch('[$€£]?\\s?((?:\\d{1,3}(?:,\\d{3})+|\\d+)(?:\\.\\d+)?)', bare)
+    if money and not re.match('0\\d', money.group(1)):
+        number = float(money.group(1).replace(',', ''))
+        return int(number) if number.is_integer() and '.' not in money.group(1) else number
+    return bare
+
+def _block_value(text: str) -> Any:
+    """A value inside an attribute block: "attachment method=none" is a value, and a block only keeps text and numbers."""
+    found = _plain(text)
+    return text.strip() if isinstance(found, bool) or (found is None and text.strip()) else found
+
+def _pair(text: str, mark: str) -> tuple[str, str] | None:
+    """(name, value) when the text opens with a field name and this mark."""
+    head, found, rest = text.partition(mark)
+    if not found and text.endswith(mark.strip()):
+        head, found, rest = (text[:-len(mark.strip())], mark, '')
+    name = re.sub(LIST_BULLET, '', head).strip()
+    if not found or not re.fullmatch(FIELD_NAME, name) or len(name.split()) > 5:
+        return None
+    return (name, rest.strip())
+
+def _split_fields(text: str, between: str, mark: str) -> tuple[list[tuple[str, str]], int]:
+    """The fields of a text cut at `between`, a part with no name joining the field before it (a value may hold the
+    separator), with how many parts carried a name. A name closed by a colon with nothing after it heads the bulleted
+    or indented lines below it, kept as one field holding those lines."""
+    parts = [p for p in text.split(between) if p.strip()]
+    fields: list[tuple[str, str]] = []
+    named = 0
+    heading = -1
+    if parts and not _pair(parts[0].strip(), mark):
+        return ([], 0)
+    for part in parts:
+        bare = part.strip()
+        if between == '\n' and heading >= 0 and (re.match(LIST_BULLET, part) or part[:1] in ' \t'):
+            name, value = fields[heading]
+            fields[heading] = (name, (value + '\n' if value else '') + bare)
+            continue
+        heading = -1
+        if between == '\n' and bare.endswith(':') and re.fullmatch(FIELD_NAME, bare[:-1].strip()):
+            fields.append((bare[:-1].strip(), ''))
+            heading = len(fields) - 1
+            named += 1
+            continue
+        pair = _pair(bare, mark)
+        if pair:
+            fields.append(pair)
+            named += 1
+        elif fields:
+            name, value = fields[-1]
+            fields[-1] = (name, value + between + bare)
+    return (fields, named) if len(parts) else ([], 0)
+
+def _attr_block(text: str) -> dict[str, Any] | None:
+    """A listing's attributes written inside one field: "a=b; c=d", a brace block, bulleted "name: value" lines, or short
+    "name: value" parts between commas. Prose stays text whatever colons it holds (a description reading "Fits: A, B. Condition:
+    new" is no block), and a name may be any short text, since attribute names come as the catalog has them."""
+    bare = text.strip()
+    if len(bare) < 5:
+        return None
+    if bare[0] in '{[' and bare[-1] in '}]':
+        try:
+            parsed = json.loads(bare)
+            return parsed if isinstance(parsed, dict) else None
+        except (ValueError, RecursionError):
+            found = dict(re.findall('[\'"]?([A-Za-z][\\w ./-]{0,38})[\'"]?\\s*[:=]\\s*[\'"]?([^,\'"}\\]]*)', bare))
+            return {k.strip(): _plain(v) for k, v in found.items()} if len(found) >= 2 else None
+    if '=' in bare:
+        out: dict[str, Any] = {}
+        last = ''
+        parts = [p for p in re.split(';\\s+|;$|\\s\\|\\s|\\n', bare) if p.strip()]
+        for part in parts:
+            name, found, value = part.partition('=')
+            if found and 0 < len(name.strip()) <= BLOCK_NAME and name.strip() not in out:
+                last = name.strip()
+                out[last] = _block_value(value)
+            elif last:
+                out[last] = f'{out[last]}; {part.strip()}'
+            else:
+                return None
+        return out if len(out) >= 2 or (out and ':' not in last and len(last) <= 30 and len(bare) <= 90) else None
+    lines = [line for line in bare.splitlines() if line.strip()]
+    if len(lines) >= 2 and all((re.match(LIST_BULLET, line) for line in lines)):
+        pairs = [_pair(line.strip(), ': ') for line in lines]
+        if all(pairs):
+            return {name: _plain(value) for name, value in pairs}
+    for between in (', ', '; '):
+        if between in bare and ': ' in bare:
+            pairs = [_pair(part.strip(), ': ') for part in bare.split(between)]
+            if len(pairs) >= 2 and all(pairs) and all(('.' not in name and len(value) <= BLOCK_VALUE for name, value in pairs)):
+                return {name: _plain(value) for name, value in pairs}
+    return None
+
+def _record_text(text: str) -> dict[str, Any] | None:
+    """The record a text spells out field by field, whichever separators it uses; None when it reads as plain prose. The
+    separators are found by trying them, the outer field mark first and then the pair mark giving the most named fields,
+    and a value spelled the same way becomes a record of its own (a listing's attributes written inside one field)."""
+    best: tuple[int, list[tuple[str, str]]] | None = None
+    for between in FIELD_MARKS:
+        if between not in text:
+            continue
+        pieces = len([p for p in text.split(between) if p.strip()])
+        for mark in PAIR_MARKS:
+            fields, named = _split_fields(text, between, mark)
+            if named < RECORD_FIELDS or named < (PAIR_SHARE if between == ', ' else FIELD_SHARE) * pieces:
+                continue
+            if len({name for name, _ in fields}) * 2 <= len(fields):
+                continue
+            if best is None or named > best[0]:
+                best = (named, fields)
+        if best:
+            break
+    if best is None:
+        return None
+    record: dict[str, Any] = {}
+    for name, value in best[1]:
+        if name in record:
+            continue
+        inner = _attr_block(value)
+        record[name] = inner if inner else value.strip() if re.search(ID_FIELD, name, re.I) else _plain(value)
+    return record
+
+def _table_text(text: str) -> list[dict[str, Any]] | None:
+    """Rows of a text table: a heading line of names, then lines cut into as many cells (markdown rules are skipped)."""
+    lines = [line.strip().strip('|').strip() for line in text.splitlines() if line.strip() and not re.fullmatch('[\\s|:+=-]+', line)]
+    if len(lines) < 2:
+        return None
+    for between in ('|', '\t', ';', ','):
+        cells = [[c.strip() for c in line.split(between)] for line in lines]
+        size = len(cells[0])
+        if size < 3 or any((len(row) != size for row in cells)) or not all((re.fullmatch(FIELD_NAME, c) for c in cells[0])):
+            continue
+        if any((re.fullmatch('[\\d.,$]+', c) for c in cells[0])):
+            continue
+        return [{name: _plain(c) for name, c in zip(cells[0], row)} for row in cells[1:]]
+    return None
+
+def _records_text(text: str) -> Any:
+    """The structured form of a text a store tool returned, or None when it holds no records."""
+    bare = text.strip()
+    if len(bare) < 12:
+        return None
+    if bare[0] in '{[':
+        try:
+            return _restore(json.loads(bare))
+        except (ValueError, RecursionError):
+            pass
+    for parts in (re.split('\\n\\s*\\n', bare), bare.splitlines()):
+        if len(parts) >= 2:
+            rows = [_record_text(p) for p in parts]
+            good = [r for r in rows if r]
+            if len(good) >= 2 and len(good) * 5 >= len(parts) * 4 and len({next(iter(r)) for r in good}) == 1:
+                return good
+    found = _table_text(bare) if '\n' in bare and _record_text(bare) is None else _record_text(bare)
+    if found is None and len(bare) <= TAG_TEXT and re.search('<[a-zA-Z/][^<>]{0,40}>', bare):
+        plain = re.sub('</?(?:b|i|em|strong|span|a|u|small)\\b[^<>]{0,40}>', '', bare, flags=re.I)
+        plain = re.sub('</t[dh]>\\s*<t[dh][^<>]{0,40}>', ': ', plain, flags=re.I)
+        plain = re.sub('\\s*(?:<[^<>]{1,40}>\\s*)+', '\n', plain).strip()
+        if plain != bare and len(plain) >= 12:
+            return _records_text(plain)
+    if found is None and '\n' in bare:
+        lines = [re.sub('(?:[ ]{2,}|\t)', ': ', line.strip(), count=1) for line in bare.splitlines() if line.strip()]
+        spaced = '\n'.join(lines)
+        if spaced != bare:
+            return _record_text(spaced)
+    return found
+
+def _block_text(text: str) -> Any:
+    """A text field of a row that already has its own fields: read as a record only when wholly written as name=value parts."""
+    if len(text) < 5 or '=' not in text or not re.search('; | \\| |\\n', text):
+        return text
+    parts = [p for p in re.split(';\\s+|;$|\\s\\|\\s|\\n', text.strip()) if p.strip()]
+    if len(parts) < 2 or not all((re.fullmatch('[^=:]{1,40}=[^=]{0,200}', p.strip()) for p in parts)):
+        return text
+    return _attr_block(text) or text
+
+def _pairs_block(rows: list[Any], in_record: bool) -> dict[str, Any] | None:
+    """Attributes written as a list: objects of a name and a value, [name, value] lists, or, inside a record, short "name: value"
+    texts. A list of offers, of highlights or of notes is no such thing."""
+    if len(rows) < 2:
+        return None
+    out: dict[str, Any] = {}
+    first = rows[0]
+    if isinstance(first, dict):
+        if any((not isinstance(r, dict) or set(r) != set(first) or len(r) != 2 for r in rows)):
+            return None
+        keys = list(first)
+        if not re.search(PAIR_KEY, str(keys[0]), re.I):
+            return None
+        for row in rows:
+            name, value = row[keys[0]], row[keys[1]]
+            if not isinstance(name, str) or not 0 < len(name) <= BLOCK_NAME or isinstance(value, (dict, list)):
+                return None
+            out[name.strip()] = value
+        return out
+    if isinstance(first, (list, tuple)):
+        for row in rows:
+            if not isinstance(row, (list, tuple)) or len(row) != 2 or not isinstance(row[0], str) or isinstance(row[1], (dict, list)) or not 0 < len(row[0]) <= BLOCK_NAME:
+                return None
+            out[row[0].strip()] = row[1]
+        return out
+    if in_record and all((isinstance(r, str) for r in rows)):
+        for row in rows:
+            pair = _pair(row.strip(), ': ') or _pair(row.strip(), '=')
+            if not pair or len(pair[1]) > BLOCK_VALUE or len(pair[0].split()) > 3:
+                return None
+            out[pair[0]] = _plain(pair[1])
+        return out
+    return None
+
+def _column_rows(node: dict[str, Any]) -> dict[str, Any]:
+    """A result that names its columns once and gives each row as a list comes back with each row as an object."""
+    heads = [k for k, v in node.items() if isinstance(v, list) and len(v) >= 2 and all((isinstance(c, str) and re.fullmatch(FIELD_NAME, c) for c in v))]
+    for head in heads:
+        names = node[head]
+        for key, rows in node.items():
+            if key != head and isinstance(rows, list) and rows and all((isinstance(r, (list, tuple)) and len(r) == len(names) for r in rows)):
+                out = {k: v for k, v in node.items() if k != head}
+                out[key] = [dict(zip(names, row)) for row in rows]
+                return out
+    return node
+
+def _id_texts(record: dict[str, Any]) -> dict[str, Any]:
+    """A record's numeric identifier as text, the form the agent keys listings by (schemas turn it back when a tool wants a number)."""
+    if not any((isinstance(v, str) and ' ' in v for v in record.values())):
+        return record
+    return {k: str(v) if isinstance(v, int) and not isinstance(v, bool) and re.search(ID_FIELD, k, re.I) and abs(v) >= 100 else v for k, v in record.items()}
+
+def _keyed_rows(node: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """Rows given as an object keyed by listing code, each a record with the same fields, as a list of rows with their code."""
+    rows = list(node.values())
+    if len(rows) < 2 or not all((isinstance(r, dict) and len(r) >= RECORD_FIELDS for r in rows)) or not all((re.search('\\d', str(k)) and ' ' not in str(k) for k in node)):
+        return None
+    if len(set(rows[0]).intersection(*rows[1:])) < RECORD_FIELDS:
+        return None
+    return [r if any((re.search(ID_FIELD, str(x), re.I) for x in r)) else {'id': str(k), **r} for k, r in node.items()]
+
+def _holds_id(node: dict[str, Any]) -> bool:
+    return any((re.search(ID_FIELD, str(k), re.I) for k in node))
+
+def _flat_block(node: dict[str, Any]) -> dict[str, Any]:
+    """An attribute block with groups inside it, as one level: {"size": {"width": 3}} gives {"size width": 3}."""
+    if not any((isinstance(v, dict) for v in node.values())):
+        return node
+    out: dict[str, Any] = {}
+    for key, value in node.items():
+        if isinstance(value, dict):
+            out.update({f'{key} {inner}': v for inner, v in value.items() if not isinstance(v, (dict, list))})
+        else:
+            out[key] = value
+    return out
+
+def _restore_field(value: Any, depth: int, carded: bool, page: bool=True) -> Any:
+    """A field's value restored; a text only becomes a record when it reads as a listing, by an id, by a code among its values
+    or by many fields, so that a store's note written with colons and semicolons stays a note."""
+    found = _restore(value, depth + 1, carded, page)
+    if isinstance(value, str) and isinstance(found, dict) and len(found) < NOTE_FIELDS and not _holds_id(found) and not any((_id_like(v) for v in found.values())):
+        return value
+    return found
+
+def _restore(value: Any, depth: int=0, in_record: bool=False, page: bool=True) -> Any:
+    """A store result in the one form the rest of the agent reads: lists of row objects, a listing's attributes as a nested
+    object. Worlds spell results differently (race 15 gave each record as one text, its attributes "a=b; c=d" inside it, and
+    a result the agent cannot read leaves every record-based check blind), so the spelling is undone here, once, for all."""
+    if depth > 7:
+        return value
+    if isinstance(value, str):
+        found = _records_text(value)
+        return found if found is not None else value
+    if isinstance(value, list):
+        block = _pairs_block(value, in_record and page)
+        if block:
+            return block
+        return [_restore_field(v, depth, False, page) for v in value]
+    if isinstance(value, dict):
+        node = _id_texts(_column_rows(value))
+        carded = len(node) >= RECORD_FIELDS or _holds_id(node)
+        keyed = {k: _keyed_rows(v) if isinstance(v, dict) else None for k, v in node.items()}
+        node = {k: keyed[k] or v for k, v in node.items()}
+        listing = _holds_id(node) or any((_id_like(v) for v in node.values()))
+        out = {k: _restore_field(v, depth, carded, page) if not isinstance(v, str) or len(node) <= 2 else (_block_text(v) if listing else v) for k, v in node.items()}
+        if depth <= 3:
+            out = {k: _flat_block(v) if isinstance(v, dict) and any((isinstance(x, dict) for x in v.values())) and not any((isinstance(x, list) for x in v.values())) and isinstance(next(iter(v.values()), None), (dict, str, int, float)) and len(node) >= RECORD_FIELDS and not _holds_id(v) else v for k, v in out.items()}
+        if len(out) == 1:
+            only = next(iter(out.values()))
+            if isinstance(only, dict) and len(only) >= RECORD_FIELDS and isinstance(next(iter(value.values())), str):
+                return only
+        return out
+    return value
+
+_FIRST_SPELLING: dict[str, str] = {}
+
+def _join_twins(held: str, value: str) -> str:
+    """Two spellings' values as one list, each element once; the first spelling's value stays known, for measures of how a key's values read."""
+    between = '(?<!\\d),|,(?!\\d)'
+    have = {part.strip().lower() for part in re.split(between, held)}
+    extra: list[str] = []
+    for part in re.split(between, value):
+        if part.strip() and part.strip().lower() not in have:
+            have.add(part.strip().lower())
+            extra.append(part.strip())
+    if not extra:
+        return held
+    joined = (f'{held}, ' if held.strip() else '') + ', '.join(extra)
+    _FIRST_SPELLING[joined] = _FIRST_SPELLING.get(held, held)
+    return joined
+
+def _fold_twins(node: Any, depth: int=0) -> Any:
+    """One line per property: a block spelling a key twice keeps the first spelling, with both values when they differ, so that
+    one element of a list is enough ("clock shape: rectangle" and "clock_shape: rectangular, square" hold square). About a tenth
+    of the listings of races 13-15 and of a practice world hold such pairs with different values; read as a conflict, they
+    lost listings the store's answer accepted. Every repeated line also costs tokens on each later model turn."""
+    if depth > 5:
+        return node
+    if isinstance(node, list):
+        return [_fold_twins(v, depth + 1) for v in node]
+    if not isinstance(node, dict):
+        return node
+    out: dict[str, Any] = {}
+    seen: dict[str, str] = {}
+    for key, value in node.items():
+        name = _words(key)
+        first = seen.get(name)
+        if first is None:
+            seen[name] = key
+            out[key] = _fold_twins(value, depth + 1)
+        elif out[first] == value:
+            continue
+        elif isinstance(out[first], str) and isinstance(value, str) and not re.search(ID_FIELD, name, re.I):
+            out[first] = _join_twins(out[first], value)
+        else:
+            out[key] = _fold_twins(value, depth + 1)
+    return out if len(out) >= 2 or len(node) < 2 else {k: _fold_twins(v, depth + 1) for k, v in node.items()}
 
 def _dump(value: Any) -> str:
     try:
@@ -247,12 +601,13 @@ def _learn_id(rows: list[dict[str, Any]]) -> str | None:
     best = None
     for key in rows[0]:
         values = [row.get(key) for row in rows]
-        if not all((_id_like(v, 'id' in str(key).lower()) for v in values)):
+        named = bool(re.search(ID_FIELD, str(key), re.I))
+        if not all((_id_like(v, named) for v in values)):
             continue
         values = [v.strip() for v in values]
         if len(rows) > 1 and len(set(values)) < len(values):
             continue
-        score = ('id' in str(key).lower(), sum((len(v) for v in values)) / len(values))
+        score = (named, sum((len(v) for v in values)) / len(values))
         if best is None or score > best[0]:
             best = (score, key)
     return best[1] if best else None
@@ -413,6 +768,7 @@ class Kyo:
         self.env_gap = ENV_GAP
         self.env_spent = 0.0
         self.env_count = 0
+        self.row_keys: set[str] = set()
         self.env_at = 0.0
 
     def left(self) -> int:
@@ -552,6 +908,8 @@ class Kyo:
                 self.step = data['step'] if isinstance(data.get('step'), int) else self.step + 1
                 if data.get('finished'):
                     self.finished = True
+                if name != self.roles.get('ask'):
+                    data['observation'] = self.unspelled(name, data.get('observation'))
                 seen = data.get('observation')
                 if name in self.page_tools() and (not (isinstance(seen, dict) and seen.get('error'))):
                     for value in args.values():
@@ -581,6 +939,31 @@ class Kyo:
                     self.broke = True
                 return None
         return None
+
+    def unspelled(self, name: str, observation: Any) -> Any:
+        """The result in the form the agent reads (_restore); on a listing view, a record whose attributes sit among its own
+        keys gets them gathered into one object: the keys the search rows do not have, holding plain values."""
+        views = {self.roles.get('open'), self.roles.get('offer'), self.roles.get('compare')}
+        out = _fold_twins(_restore(observation, page=name in views or name != self.roles.get('search')))
+        if name not in views:
+            return out
+        self.row_keys.update((k for ident, row in self.rows.items() if ident not in self.opened for k in row))
+        known = self.row_keys
+        if not known:
+            return out
+
+        def gathered(record: Any) -> Any:
+            if not isinstance(record, dict) or _fact_block(record) or not self.ident(record, True):
+                return record
+            extra = {k: v for k, v in record.items() if k not in known and isinstance(v, (str, int, float)) and not isinstance(v, bool)}
+            if len(extra) < RECORD_FIELDS:
+                return record
+            return {**{k: v for k, v in record.items() if k not in extra}, 'attributes': extra}
+        if isinstance(out, dict) and self.ident(out):
+            return gathered(out)
+        if isinstance(out, dict):
+            return {k: [gathered(r) for r in v] if isinstance(v, list) else v for k, v in out.items()}
+        return out
 
     def read_request(self) -> None:
         lines = []
@@ -1014,7 +1397,8 @@ class Kyo:
                 if isinstance(value, list):
                     found += [(i, r) for r in value if isinstance(r, dict) for i in [self.ident(r, True)] if i]
                 elif isinstance(value, dict):
-                    found += [(i, r) for v in value.values() if isinstance(v, list) for r in v if isinstance(r, dict) for i in [self.ident(r, True)] if i]
+                    inner = self.ident(value, False, 1)
+                    found += [(inner, value)] if inner else [(i, r) for v in value.values() if isinstance(v, list) for r in v if isinstance(r, dict) for i in [self.ident(r, True)] if i]
             return found
         if isinstance(observation, list):
             return [(i, r) for r in observation if isinstance(r, dict) for i in [self.ident(r, True)] if i]
@@ -3003,6 +3387,7 @@ class Kyo:
         self.trace.append({'kind': 'brief', 'brief': self.brief})
         opening = self.view.get('opening')
         if opening is not None:
+            opening = _restore(opening)
             self.absorb(opening)
         intro = "SHOPPER'S REQUEST:\n" + self.request
         if opening is not None:
