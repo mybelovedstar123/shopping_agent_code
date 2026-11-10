@@ -127,7 +127,9 @@ def read_money(text: str) -> tuple[float | None, str, bool]:
     limit = (
         r"(?:,?\s*(?:for |of )?(?:nothing over|not over|under|below|less than|at most"
         r"|no more than|up to|within|maximum of"
-        r"|max|budget of|budget is|spend(?:ing)?(?: at most)?|cost(?:ing)? (?:at most|under))\s*)"
+        r"|max|budget of|budget is|spend(?:ing)?(?: at most)?|cost(?:ing)? (?:at most|under))\s*"
+        # A bare price ("2 mugs at $15 each") belongs to the amount, not to the product's name.
+        r"|,?\s*\b(?:at|for|costing|priced at)\s+)"
     )
     amount = r"(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)"  # "1,200" is one amount
     patterns = (
@@ -153,6 +155,12 @@ def read_money(text: str) -> tuple[float | None, str, bool]:
 def _pick(text: str) -> tuple[str, str]:
     if re.search(r"cheapest|lowest price|least expensive|best price|lowest cost", text, re.I):
         return "cheapest", ""
+    # "the largest mug" names the product, not a measure: the measure is its size.
+    match = re.search(
+        rf"(?<!at )\b(largest|biggest|smallest)\s+(?!(?:{MEASURED})\b)[a-z]", text, re.I
+    )
+    if match:
+        return ("least" if match.group(1).lower() == "smallest" else "most"), "size"
     # "at most" and "at least" set limits, not pick rules.
     match = re.search(
         r"(?<!at )\b(most|highest|largest|biggest)\s+([a-z]+(?: [a-z]+)?)", text, re.I
@@ -250,11 +258,13 @@ def parse_request(request: str, tools: list[dict[str, Any]]) -> Brief:
     brief = Brief(request=request, roles=roles)
     text = " ".join(request.split())
 
+    count = r"\d+|one|two|three|four|five|six|seven|eight|nine|ten"
     match = re.search(
-        r"\b(?:at most|up to|only|ask me)?\s*(\d+) (?:questions?|messages?)\b", text, re.I
+        rf"\b(?:at most|up to|only|ask me)?\s*({count}) (?:questions?|messages?)\b", text, re.I
     )
     if match:
-        brief.messages = int(match.group(1))
+        word = match.group(1).lower()
+        brief.messages = int(word) if word.isdigit() else NUMBER_WORDS[word]
         text = text[: match.start()] + text[match.end() :]
     elif re.search(r"\b(don't|do not|no need to) (ask|message|contact)\b", text, re.I):
         brief.messages = 0
@@ -268,6 +278,13 @@ def parse_request(request: str, tools: list[dict[str, Any]]) -> Brief:
     if re.search(APPROVAL, text, re.I):
         step = {"step": "get the shopper's approval", "when": "order", "messages": 1}
         brief.process.append(step)
+        # "Buy a red mug, and ask me before you buy": the approval clause is not the product.
+        text = re.sub(
+            rf",?\s*\b(?:and|but|then)\s+(?:[\w']+\s+){{0,3}}?{APPROVAL}[^.;!?]*",
+            " ",
+            text,
+            flags=re.I,
+        )
     brief.pick, brief.pick_measure = _pick(text)
     brief.budget, text, each = read_money(text)
     if each:

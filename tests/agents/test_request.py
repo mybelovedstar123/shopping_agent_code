@@ -91,6 +91,13 @@ def test_budget_scope_each():
     assert parse("Buy 2 mugs, each under $5.").budget_scope == "each"
 
 
+@pytest.mark.parametrize("phrase", ["at $15 each", "for $15 each", "costing $15 each"])
+def test_a_bare_price_is_not_part_of_the_product(phrase):
+    brief = parse(f"Buy 2 mugs {phrase}.")
+    assert (brief.budget, brief.budget_scope) == (15, "each")
+    assert [(i.name, i.quantity) for i in brief.items] == [("mugs", 2)]
+
+
 def test_each_elsewhere_in_the_request_leaves_the_budget_a_total():
     brief = parse("Buy 2 red desk lamps under $30. Each one must be red.")
     assert brief.budget == 30 and brief.budget_scope == "total"
@@ -109,6 +116,20 @@ def test_each_elsewhere_in_the_request_leaves_the_budget_a_total():
 def test_pick_rule(text, pick, measure):
     brief = parse(text)
     assert (brief.pick, brief.pick_measure) == (pick, measure)
+
+
+@pytest.mark.parametrize(
+    "text, pick",
+    [
+        ("Buy the largest mug.", "most"),
+        ("Buy the biggest mug.", "most"),
+        ("Buy the smallest mug.", "least"),
+    ],
+)
+def test_a_size_word_before_the_product_keeps_the_product(text, pick):
+    brief = parse(text)
+    assert (brief.pick, brief.pick_measure) == (pick, "size")
+    assert [i.name for i in brief.items] == ["mug"]
 
 
 def test_cheapest_is_not_part_of_the_item_name():
@@ -137,6 +158,12 @@ def test_story_around_the_request_is_not_a_requirement():
     assert item.name == "mug" and item.musts == ["colour: blue"]
 
 
+@pytest.mark.parametrize("text, count", [("at most one question", 1), ("only two messages", 2)])
+def test_message_limit_written_in_words(text, count):
+    brief = parse(f"Buy a mug. Ask me {text}.")
+    assert brief.messages == count and [i.name for i in brief.items] == ["mug"]
+
+
 def test_message_limits():
     assert parse("Buy a mug.").messages == 3
     assert parse("Buy a mug. Ask me at most 2 questions.").messages == 2
@@ -147,10 +174,19 @@ def test_no_messages_without_an_ask_tool():
     assert parse_request("Buy a mug.", [tool("checkout")]).messages == 0
 
 
-def test_approval_becomes_a_process_step():
-    brief = parse("Buy a mug, but get my approval before ordering.")
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Buy a mug, but get my approval before ordering.",
+        "Buy a mug, and ask me before you buy.",
+        "Buy a mug and check with me first.",
+        "Buy a mug. Check with me before you buy it.",
+    ],
+)
+def test_approval_becomes_a_process_step(text):
+    brief = parse(text)
     assert brief.process == [{"step": "get the shopper's approval", "when": "order", "messages": 1}]
-    assert brief.items[0].name.startswith("mug")
+    assert [(i.name, i.musts) for i in brief.items] == [("mug", [])]
 
 
 def test_step_limit():
