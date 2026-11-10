@@ -21,11 +21,21 @@ OUTAGE_BY = 150.0
 SHOW_CHARS = 450
 HUNT_STEPS = 24
 ENV_GAP = 0.25
+OPEN_GAP = 0.5
 TABLE_KEYS = 18
 CHEAPER_SHOWN = 4
+OPEN_LATER = 2
+PAGE_ATTR_CHARS = 700
+PAGE_REST_CHARS = 300
 TRAIL_ROOM = 15
 FIT_PAGES = 2
 CRASH_TURNS = 3
+OPEN_MIN_STEPS = 20
+OPEN_ROWS = 5
+OPEN_ITEMS = 2
+OPEN_SHARE = 5
+OPEN_EACH = 6
+OPEN_NOT = '\\b(?:not|no|other than|unlike|at most|at least|under|over|below|above|less|more|between|within|up to|or|same|listing)\\b'
 SHORT_KEEP = 8
 SET_SHOWN = 2
 STOCK_OUT = '^(?:no|none|false|0|n)$|out[ _-]?of[ _-]?stock|sold[ _-]?out|unavailable|not[ _-]?available'
@@ -2345,6 +2355,81 @@ class Kyo:
         self.trace.append({'kind': 'shorter', 'from': text, 'to': short, 'rows': len(self.records_in(seen))})
         return f'\n[Kyo] Nothing has all those words; the same search with {short!r} shows:\n' + self.show(seen)
 
+    @_soft('')
+    def first_moves(self) -> str:
+        """Search each item once and read a few of its listings before the model's first turn, so the interview can start at once.
+
+        A race model turn costs 5-10 s (race 15: 207 s mean per task, 16 of 180 and 30 of 180 episodes of two agents killed at 300 s,
+        all on 3+ items) and the first turns only do this; one-item tasks have time, and keep the model's own first searches. Each
+        item's search is its required values with its noun, then its name when that finds nothing. Returns what the store showed; '' when the search tool cannot be used without a model's reading of its
+        modes, and the model then starts as usual."""
+        plan = self.value_template()
+        if not plan or self.max_steps < OPEN_MIN_STEPS or len(self.items) < OPEN_ITEMS:
+            return ''
+        tool, base, field = plan
+        self.env_gap = OPEN_GAP
+        shown: list[str] = []
+        stop_at = self.step + self.left() - self.tail() - self.msgs_free() - OPEN_LATER * len(self.items) - HUNT_KEEP // 2
+        for number, item in enumerate(self.items, 1):
+            wanted = [m.split(':', 1)[1].strip() for m in item.musts if ':' in m and m not in [need for _, need in self.refs]]
+            wanted = [w for w in wanted if w and len(w.split()) <= 3 and not re.search(OPEN_NOT, w, re.I)]
+            noun = item.name if len(item.name.split()) <= 3 else ' '.join(item.name.split()[-2:])
+            tries = list(dict.fromkeys(([' '.join(wanted[:2] + [noun])] if wanted else []) + [noun]))
+            for query in tries:
+                faults: list[str] = []
+                args = _shape({**base, field: query}, self.schemas.get(tool), 'args', faults)
+                if faults or self.finished or self.step >= stop_at:
+                    break
+                reply = self.act(tool, args)
+                if reply is None:
+                    return '\n'.join(shown)
+                seen = reply.get('observation')
+                self.observe(tool, seen)
+                if self.records_in(seen):
+                    self.searched = (self.searched + [dict(args)])[-8:]
+                    shown.append(f'{query}: ' + self.show(seen))
+                    shown += self.more_rows_for_keys(tool, args, seen, stop_at, number)
+                    if self.rows_of_item(number) >= OPEN_EACH:
+                        break
+                else:
+                    shown.append(f"{query}: {'the store refused the call: ' + self.show(seen) if _failed(seen) else 'no rows'}")
+        if self.rows and self.roles.get('ask') and self.msgs_free() > 0:
+            start = self.step
+            found = [n for n in range(1, len(self.items) + 1) if self.rows_of_item(n)]
+            while self.step - start < self.max_steps // OPEN_SHARE and self.step < stop_at and not self.finished:
+                if min((self.records_of_item(n) for n in found), default=OPEN_EACH) >= OPEN_EACH:
+                    break
+                had = len(self.full)
+                self.widen()
+                if len(self.full) == had:
+                    break
+        self.env_gap = ENV_GAP
+        self.trace.append({'kind': 'first_moves', 'rows': len(self.rows), 'opened': len(self.full)})
+        shown += ['read in full: ' + self.page_text(ident, record) for ident, record in self.full.items()]
+        proof = self.evidence(list(self.full.values()))
+        return '\n'.join(shown + ([proof] if proof else []))
+
+    def page_text(self, ident: str, record: dict[str, Any]) -> str:
+        """One read listing for the model: its attributes first, since those are what it judges."""
+        block = _fact_block(record) or {}
+        rest = {k: v for k, v in record.items() if v is not block and not isinstance(v, (dict, list))}
+        return f'{ident}: attributes ' + _dump(_clip(block, 120))[:PAGE_ATTR_CHARS] + ' | ' + _dump(_clip(rest, 200))[:PAGE_REST_CHARS]
+
+    def more_rows_for_keys(self, tool: str, args: dict[str, Any], seen: Any, stop_at: int, number: int) -> list[str]:
+        """One further page when a first page shows too few of the item's listings to tell what they carry; what it showed."""
+        page = self.paging(tool, seen)
+        if not page or page[3] is None or self.rows_of_item(number) >= OPEN_EACH or self.finished or self.step >= stop_at:
+            return []
+        faults: list[str] = []
+        call = _shape({**args, page[2]: page[3]}, self.schemas.get(tool), 'args', faults)
+        if faults:
+            return []
+        reply = self.act(tool, call)
+        if reply is None:
+            return []
+        self.observe(tool, reply.get('observation'))
+        return [f'next page: ' + self.show(reply.get('observation'))]
+
     def observe(self, name: str, observation: Any) -> str:
         self.absorb(observation)
         lines = self.loose_lines(observation)
@@ -4393,10 +4478,15 @@ class Kyo:
         if opening is not None:
             opening = _restore(opening)
             self.absorb(opening)
+        moved = self.first_moves() if not self.finished else ''
+        self.env_gap = ENV_GAP
         intro = "SHOPPER'S REQUEST:\n" + self.request
         if opening is not None:
             intro += '\n\nWHAT THE STORE SHOWS FIRST:\n' + self.show(opening)
-        intro += '\n\nStart by searching for each item in its category and opening several listings in full, so the interviewer can see which properties these listings carry.\n\n' + self.status()
+        if moved:
+            intro += '\n\nKyo has searched for each item and read some of its listings (one step each):\n' + moved + '\nJudge these against the requirements and search further only for what is still missing.\n\n' + self.status()
+        else:
+            intro += '\n\nStart by searching for each item in its category and opening several listings in full, so the interviewer can see which properties these listings carry.\n\n' + self.status()
         self.chat = [{'role': 'system', 'content': GUIDE}, {'role': 'user', 'content': intro}]
         self.work(LOOP_CALLS, SPEND_HARD)
         if not self.finished:
