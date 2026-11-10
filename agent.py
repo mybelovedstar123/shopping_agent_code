@@ -15,13 +15,31 @@ SPEND_HARD = 0.078
 HEAVY_ROOM = 0.02
 WAITS = (4, 10, 20, 35)
 WAIT_TOTAL = 45
+BRIEF_BY = 120.0
+BRIEF_GAP = 10.0
+OUTAGE_BY = 150.0
 SHOW_CHARS = 450
+ENV_GAP = 0.25
+TABLE_KEYS = 18
+CRASH_TURNS = 3
+STOCK_OUT = '^(?:no|none|false|0|n)$|out[ _-]?of[ _-]?stock|sold[ _-]?out|unavailable|not[ _-]?available'
+TEXT_CHARS = 3000
 OBS_LIMIT = 15000
 HISTORY_LIMIT = 150000
 GATE_ROUNDS = 3
 AUTO_PAGES = 6
 CHEAPER_OPENS = 3
+TASK_SECONDS = 300.0
+TIME_MARGIN = 20.0
+CALL_FLOOR = 6.0
+ASK_BY = 165.0
+WIND_DOWN = 200.0
+LAST_TURN = 255.0
+EMPTY_ROOM = 12.0
+SHELF_ARG = 'section|department|categor|label|shelf|aisle|(?<!age)(?:^|_)group(?:_name|_label)?$'
+QUERY_WORDS = '(?:^|_)(?:q|query|search|text|phrase|keywords?|terms?|words?)(?:_|$)|query|phrase|keyword'
 _llm = ProxyClient(timeout=50, max_retries=1, retry_delay=1)
+_llm_short: dict[int, ProxyClient] = {}
 _env = ProxyClient(timeout=95, max_retries=3, retry_delay=1)
 GUIDE = 'You are Kyo, a careful buyer working for one shopper in an online store. You can act only by calling the store\'s tools. The episode is graded 1 or 0: it earns 1 only when the finish is exactly right. A purchase must contain every requested item at the requested quantity, each meeting every requirement in force when you check out, inside the budget; or, when the store truly has nothing that meets everything, the episode must end with the no-purchase tool in the way the request asks.\n\nHOW THE STORE WORKS\n- Every tool call is one step and steps are limited; thinking costs nothing. Tool names, argument names and result shapes are particular to this store: read each tool\'s description and schema and use the exact argument names and allowed values.\n- Search tools can be narrow: a category filter, a keyword mode that may only read the first words of the query, a page size of a few rows, a token or offset for the next page. Compare the reported total with the rows you have seen and page on (with the exact token or offset the store gives) when the answer depends on seeing all of them. Keyword queries work best short and value-first (the wanted value plus the product noun). A filtered search that returns no rows usually means the filter value or the filter parameter is wrong: retry with the label exactly as result rows show it, or with another filter parameter.\n- Search rows are summaries. Stores split a listing\'s record differently: one view can show its attributes (properties), another only its offer and description, and a side-by-side view may carry either. The ledger names the tool that shows attributes once Kyo knows it. Judge every requirement on a property from those attributes, so read them for each listing you may buy; one call that shows several listings saves steps when it shows what you need. Never open a listing again when nothing has changed since you read it.\n- Questions to the shopper are handled for you by Kyo\'s interviewer, so you never message the shopper yourself. Its answers arrive in the conversation and are added to the ledger.\n- The request can also ask for steps along the way: an approval, a message, something to check or read first. The ledger lists them. Kyo carries out the ones due just before the order or the ending itself when you call the checkout or the ending tool, so never wait for those and never end without a purchase because of them; do any others with the store\'s tools (product questions go through Kyo\'s interviewer).\n\nWHAT COUNTS AS A FIT\n- The kind of product is decided by the listing\'s category label: only the label that matches the requested item as a whole counts, never a neighbouring one.\n- A requirement on a property is met when the listing\'s attribute for that property states the value. Key spelling does not matter (spaces, underscores, camel case, prefixes), and one element of a comma or slash list is enough. Values match by their words: case, singular or plural and plain synonyms are fine, and a value that contains the required value\'s words counts ("deep teal" meets teal, "extra roomy fit" meets roomy). A value with different words does not count (an abbreviation or code is not the word it stands for, and "teal green" is not "sea green"). Units are converted before comparing numbers, limits include the edge value, and a range must lie wholly inside a limit.\n- An attribute whose key names the requirement\'s property (under that name or a plain synonym) decides: if it says something else, the listing fails whatever other keys or the title say. A key for a different property, even a related one (a handle colour is not the body\'s colour), decides nothing about the requirement. Kyo adds [evidence] lines after opened listings with the keys whose names match a requirement.\n- When the listing has no attribute for that property, the wanted value stated under another attribute (for example a list of styles or features that includes it) or in the title or description counts. A number of another kind does not (a weight is not a capacity), nor a bare figure whose text does not say what it measures.\n- When the category label itself states a requirement\'s value (a season or audience in the label), that requirement is met by the category.\n- A requirement can point at another listing instead of giving a value ("the same X as the listing sold by <shop> with <property>", "within N of the X on the page of ..."). Resolve it first: find that listing (search its category, brand, shop or words), open its page in full with the single-item or side-by-side tool (a search row is not enough), and when that page refers you to a further listing for the property, find and open that one the same way; the last page gives the value. The order counts only when every page of that chain was opened. When the wanted value is anything but that other listing\'s value, the rule excludes only listings sharing that exact value, and never end without a purchase because of it alone.\n- When a listing you are about to buy sends you to another page for more about it, look at that page before you buy.\n- When one requested item must fit another (an accessory for a device), choose the two together from the listings\' own words (a list of what it fits, a model or series code that both pages carry). When no accessory that meets its own requirements fits the device you picked, switch to another device that meets its requirements and that such an accessory fits; never end without a purchase while that switch is untried.\n- Respect exclusions and closed lists. Wishes ("ideally", "would be nice") are tie-breakers only.\n- Never buy an item that the store shows as sold out; the total (price times quantity, summed over every line) may not exceed the budget; equal is fine.\n\nCHOOSING\n- When the request asks for the cheapest (lowest total, smallest price), the order must hold the lowest-priced listing among ALL listings that fit. Find the whole fitting set (page through it: result rows are often in no price order, and Kyo reads the next pages of a short result itself), check candidates in ascending price, and take the first that fully fits. When a search takes a maximum price, use it: list the category below the price of your current best pick, so only cheaper candidates are left to check.\n- When the request asks for the most or least of some measure, compare every fitting listing on that measure and take the extreme; a listing that does not state the measure cannot win.\n- Otherwise any listing that meets everything is right: do not waste steps hunting for something better.\n- Cart each item as soon as you have opened a listing that meets every requirement for it (with a cheapest, most or least pick: once you have compared the fitting set), then move on. Stores often sell out a carted line soon after it is added, and an early cart leaves steps to replace it.\n- A request for several different items needs one cart line per item, each at its requested quantity.\n\nCHANGES WHILE YOU WORK\n- The shopper or the store can change things: a new budget, a requirement added or dropped, a price change, a listing sold out. They appear inside tool results, often when you try to check out (a refusal); a note counts whichever tool\'s result shows it, and the ledger lists the requirements in force. The episode goes on after a refusal: apply every change, fix the cart and check out again.\n- Re-read a chosen listing\'s record shortly before checking out, because price and stock can change silently.\n\nFINISHING\n- Put exactly the chosen lines in the cart (remove anything else), look at the cart once, then check out with a call on its own.\n- End without a purchase only after a real search finds no listing that meets everything. Running short of steps proves nothing of the kind: then check out the best cart you have. Follow the request\'s wording for that ending, and when a remark is needed, keep it short and name no listing.\n- Every reply must call at least one tool. Keep your text short: what you know, then the next move.'
 BRIEF = 'You prepare a shopping task for an agent. Read the shopper\'s request and the store\'s tools and return ONE JSON object (compact, no indentation, nothing else) with these keys:\n\n"items": a list with one entry per distinct product the shopper wants bought, each {"name": the kind of product in the request\'s words, "shelf": the store\'s category label for it when a tool lists labels (copy it exactly), else "", "quantity": units of that one listing (integer, 1 when not stated; a pair or a set that is one listing counts as 1), "musts": a list of firm requirements on that product, each "property: constraint" with the exact value, limit, exclusion or closed list. Name the property with the request\'s own word for it ("meant for a lakeside occasion" gives "occasion: lakeside", "a 12-inch blade" gives "blade length: 12 inch"); do not swap it for a neighbouring property. A must whose value is read from another listing is ONE must holding the whole description of that listing ("rim colour: unlike the rim colour of the kettle Ovarno sells with a glass lid"): words that describe that other listing (its shop, its kind, "with <property> <value> and <property> <value>" after it) stay inside that one must and are never musts of this product}. Never put price, budget, stock or quantity into musts. The story around the request (the person meant to use it, where it will stand, what went wrong before, the occasion behind it) is context, not a must, unless it states a property\'s value or limit outright; and never turn words that are part of what the product is called (a season or an audience named with the product) into musts: those belong to "name". A use or occasion the request makes a property of the product itself ("blazers for business wear", "a dress made for parties", "the occasion has to be party") IS a must on that property ("occasion: business"), unless the store\'s category label already names it; an event, person or setting the product is bought for ("to wear at his wedding", "for a colleague"), and how it should sit, feel or look in use, stay context. A product the request names in one phrase joined by "and" (one "I want ..." with one quantity, often the name of one store department) is ONE item; make separate items only when the request gives each product its own quantity or its own requirements.\n"budget": the most the shopper will pay in total as a number in the request\'s own unit, or null.\n"budget_unit": that unit in words (for example "cents"), or null.\n"budget_scope": "total" when the limit covers the whole order, "each" when it is per item, null when there is no limit.\n"in_stock_only": true unless the request clearly accepts items that are not available.\n"pick": "cheapest" when the request asks for the lowest price or smallest total, "most" or "least" when it asks for the extreme of some measure, else "any". Remarks that money is tight are not a pick rule.\n"pick_measure": what is maximised or minimised for "most"/"least", else "".\n"messages": how many messages the shopper allows the agent to send (integer), or null when not stated.\n"steps": how many steps, moves or tool calls the request allows (integer), or null.\n"lookups": a list of the musts (copied exactly) whose value must first be read from another listing the request points at, else [].\n"rules": a list of every instruction the request gives about how to work or how to end, each in at most 12 words.\n"wishes": a list of things the shopper would merely like.\n"ask_first": a list of things the request explicitly says to check with the shopper before choosing (empty when none).\n"process": a list of the steps the request requires the agent to take besides finding and buying the right items (getting the shopper\'s approval, telling or showing the shopper something, checking something with them, reading something first, using a particular tool), each {"step": what must be done, in at most 15 words, "when": "choose" (before the products are chosen), "order" (right before checking out) or "end" (just before ending without a purchase), "messages": how many messages to the shopper it takes (0 when none)}; [] when the request asks for no such step. Requirements on the items, the budget, stock, the limits on messages and steps, and how to end when nothing fits are not steps.\n"quiet_decline": true when the request says not to suggest or name alternatives when nothing fits, false when it asks for them, null when it says nothing.\n"fits": a list of {"item": item number, "with": item number} for each requested item that the request says must work with, fit or suit ANOTHER requested item (the one the agent picks); [] when none.\n"roles": an object naming the exact tool for each job, or null when no tool does it: "search", "open" (shows one listing\'s attributes or properties; when two single-listing tools exist, the one whose description promises attributes, properties or specifications), "offer" (shows one listing\'s current offer, such as its price and stock, when that is a different tool from "open"), "compare" (several listings in full), "ask" (sends a message to the shopper), "cart" (changes the cart), "cart_view" (shows the cart), "buy" (checks out), "refuse" (ends without a purchase).\n"buy_args": the fixed arguments that make the "buy" tool check out (for a tool with a mode argument, that mode), else {}.\n"refuse_args": the fixed arguments that make the "refuse" tool end without a purchase, else {}.\n'
@@ -63,6 +81,370 @@ def _fit_marks(text: Any) -> dict[str, Any]:
     also = [(hit.group(1).upper(), _codes(hit.group(2))) for hit in re.finditer('\\bpart\\s+(' + PART_CODE + ')\\s+also fits\\s*:?\\s*([^.;]+)', text, re.I)]
     more = re.search('\\b(?:more|details|see|read)\\s+(?:on|at|under|about)?\\s*(?:the\\s+)?part\\s+(' + PART_CODE + ')', text, re.I)
     return {'own': own.group(1).upper() if own else '', 'codes': codes, 'works': works, 'also': also, 'more': more.group(1).upper() if more else ''}
+PAIR_MARKS = (': ', ' = ', '=', ' -> ', ' - ')
+FIELD_MARKS = (' | ', '\n', ' || ', ' ; ', '; ', '\t', ' // ', ' · ', ' • ', '|', ';', ', ')
+FIELD_NAME = "[A-Za-z][A-Za-z0-9_ ./&'()-]{0,38}"
+LIST_BULLET = '^\\s*(?:[-*•·]|\\d{1,3}[.)])\\s+'
+RECORD_FIELDS = 3
+NOTE_FIELDS = 5
+FIELD_SHARE = 0.15
+PAIR_SHARE = 0.7
+BLOCK_NAME = 60
+BLOCK_VALUE = 40
+TAG_TEXT = 20000
+PAIR_KEY = 'name|key|label|attr|prop|field|spec|title|^k$'
+ID_FIELD = '(?:^|[_ -])(?:id|idx|sku|pid|ref|asin|ident\\w*)(?:$|[_ -])|^id(?-i:[A-Z0-9])|(?-i:Ident)|(?<![a-z])(?!(?:paid|valid|grid|solid|rigid|fluid|liquid|hybrid|rapid|void|acid|humid|android|said|laid)$)[a-z]*id$'
+FAIL_KEY = 'error|fail|(?<!de)fault|trouble(?!shoot)|denied|refus|invalid'
+
+def _failed(observation: Any) -> bool:
+    """Whether a result only reports that the call failed: a small object with a key saying so, or one bare code."""
+    if not isinstance(observation, dict) or not 0 < len(observation) <= 3:
+        return False
+    if any((value and re.search(FAIL_KEY, str(key), re.I) for key, value in observation.items())):
+        return True
+    only = next(iter(observation.values()))
+    return len(observation) == 1 and isinstance(only, str) and 0 < len(only) <= 40 and ' ' not in only
+
+def _plain(text: str) -> Any:
+    """A field's text as the value a structured result would hold: a boolean, nothing, a number, else the text."""
+    bare = text.strip()
+    low = bare.lower()
+    if low in ('true', 'false'):
+        return low == 'true'
+    if low in ('none', 'null', ''):
+        return None
+    money = re.fullmatch('[$€£]?\\s?((?:\\d{1,3}(?:,\\d{3})+|\\d+)(?:\\.\\d+)?)', bare)
+    if money and not re.match('0\\d', money.group(1)):
+        number = float(money.group(1).replace(',', ''))
+        return int(number) if number.is_integer() and '.' not in money.group(1) else number
+    return bare
+
+def _block_value(text: str) -> Any:
+    """A value inside an attribute block: "attachment method=none" is a value, and a block only keeps text and numbers."""
+    found = _plain(text)
+    return text.strip() if isinstance(found, bool) or (found is None and text.strip()) else found
+
+def _pair(text: str, mark: str) -> tuple[str, str] | None:
+    """(name, value) when the text opens with a field name and this mark."""
+    head, found, rest = text.partition(mark)
+    if not found and text.endswith(mark.strip()):
+        head, found, rest = (text[:-len(mark.strip())], mark, '')
+    name = re.sub(LIST_BULLET, '', head).strip()
+    if not found or not re.fullmatch(FIELD_NAME, name) or len(name.split()) > 5:
+        return None
+    return (name, rest.strip())
+
+def _split_fields(text: str, between: str, mark: str) -> tuple[list[tuple[str, str]], int]:
+    """The fields of a text cut at `between`, a part with no name joining the field before it (a value may hold the
+    separator), with how many parts carried a name. A name closed by a colon with nothing after it heads the bulleted
+    or indented lines below it, kept as one field holding those lines."""
+    parts = [p for p in text.split(between) if p.strip()]
+    fields: list[tuple[str, str]] = []
+    named = 0
+    heading = -1
+    if parts and not _pair(parts[0].strip(), mark):
+        return ([], 0)
+    for part in parts:
+        bare = part.strip()
+        if between == '\n' and heading >= 0 and (re.match(LIST_BULLET, part) or part[:1] in ' \t'):
+            name, value = fields[heading]
+            fields[heading] = (name, (value + '\n' if value else '') + bare)
+            continue
+        heading = -1
+        if between == '\n' and bare.endswith(':') and re.fullmatch(FIELD_NAME, bare[:-1].strip()):
+            fields.append((bare[:-1].strip(), ''))
+            heading = len(fields) - 1
+            named += 1
+            continue
+        pair = _pair(bare, mark)
+        if pair:
+            fields.append(pair)
+            named += 1
+        elif fields:
+            name, value = fields[-1]
+            fields[-1] = (name, value + between + bare)
+    return (fields, named) if len(parts) else ([], 0)
+
+def _attr_block(text: str) -> dict[str, Any] | None:
+    """A listing's attributes written inside one field: "a=b; c=d", a brace block, bulleted "name: value" lines, or short
+    "name: value" parts between commas. Prose stays text whatever colons it holds (a description reading "Fits: A, B. Condition:
+    new" is no block), and a name may be any short text, since attribute names come as the catalog has them."""
+    bare = text.strip()
+    if len(bare) < 5:
+        return None
+    if bare[0] in '{[' and bare[-1] in '}]':
+        try:
+            parsed = json.loads(bare)
+            return parsed if isinstance(parsed, dict) else None
+        except (ValueError, RecursionError):
+            found = dict(re.findall('[\'"]?([A-Za-z][\\w ./-]{0,38})[\'"]?\\s*[:=]\\s*[\'"]?([^,\'"}\\]]*)', bare))
+            return {k.strip(): _plain(v) for k, v in found.items()} if len(found) >= 2 else None
+    if '=' in bare:
+        out: dict[str, Any] = {}
+        last = ''
+        parts = [p for p in re.split(';\\s+|;$|\\s\\|\\s|\\n', bare) if p.strip()]
+        for part in parts:
+            name, found, value = part.partition('=')
+            if found and 0 < len(name.strip()) <= BLOCK_NAME and name.strip() not in out:
+                last = name.strip()
+                out[last] = _block_value(value)
+            elif last:
+                out[last] = f'{out[last]}; {part.strip()}'
+            else:
+                return None
+        return out if len(out) >= 2 or (out and ':' not in last and len(last) <= 30 and len(bare) <= 90) else None
+    lines = [line for line in bare.splitlines() if line.strip()]
+    if len(lines) >= 2 and all((re.match(LIST_BULLET, line) for line in lines)):
+        pairs = [_pair(line.strip(), ': ') for line in lines]
+        if all(pairs):
+            return {name: _plain(value) for name, value in pairs}
+    for between in (', ', '; '):
+        if between in bare and ': ' in bare:
+            pairs = [_pair(part.strip(), ': ') for part in bare.split(between)]
+            if len(pairs) >= 2 and all(pairs) and all(('.' not in name and len(value) <= BLOCK_VALUE for name, value in pairs)):
+                return {name: _plain(value) for name, value in pairs}
+    return None
+
+def _record_text(text: str) -> dict[str, Any] | None:
+    """The record a text spells out field by field, whichever separators it uses; None when it reads as plain prose. The
+    separators are found by trying them, the outer field mark first and then the pair mark giving the most named fields,
+    and a value spelled the same way becomes a record of its own (a listing's attributes written inside one field)."""
+    best: tuple[int, list[tuple[str, str]]] | None = None
+    for between in FIELD_MARKS:
+        if between not in text:
+            continue
+        pieces = len([p for p in text.split(between) if p.strip()])
+        for mark in PAIR_MARKS:
+            fields, named = _split_fields(text, between, mark)
+            if named < RECORD_FIELDS or named < (PAIR_SHARE if between == ', ' else FIELD_SHARE) * pieces:
+                continue
+            if len({name for name, _ in fields}) * 2 <= len(fields):
+                continue
+            if best is None or named > best[0]:
+                best = (named, fields)
+        if best:
+            break
+    if best is None:
+        return None
+    record: dict[str, Any] = {}
+    for name, value in best[1]:
+        if name in record:
+            continue
+        inner = _attr_block(value)
+        record[name] = inner if inner else value.strip() if re.search(ID_FIELD, name, re.I) else _plain(value)
+    return record
+
+def _table_text(text: str) -> list[dict[str, Any]] | None:
+    """Rows of a text table: a heading line of names, then lines cut into as many cells (markdown rules are skipped)."""
+    lines = [line.strip().strip('|').strip() for line in text.splitlines() if line.strip() and not re.fullmatch('[\\s|:+=-]+', line)]
+    if len(lines) < 2:
+        return None
+    for between in ('|', '\t', ';', ','):
+        cells = [[c.strip() for c in line.split(between)] for line in lines]
+        size = len(cells[0])
+        if size < 3 or any((len(row) != size for row in cells)) or not all((re.fullmatch(FIELD_NAME, c) for c in cells[0])):
+            continue
+        if any((re.fullmatch('[\\d.,$]+', c) for c in cells[0])):
+            continue
+        return [{name: _plain(c) for name, c in zip(cells[0], row)} for row in cells[1:]]
+    return None
+
+def _records_text(text: str) -> Any:
+    """The structured form of a text a store tool returned, or None when it holds no records."""
+    bare = text.strip()
+    if len(bare) < 12:
+        return None
+    if bare[0] in '{[':
+        try:
+            return _restore(json.loads(bare))
+        except (ValueError, RecursionError):
+            pass
+    for parts in (re.split('\\n\\s*\\n', bare), bare.splitlines()):
+        if len(parts) >= 2:
+            rows = [_record_text(p) for p in parts]
+            good = [r for r in rows if r]
+            if len(good) >= 2 and len(good) * 5 >= len(parts) * 4 and len({next(iter(r)) for r in good}) == 1:
+                return good
+    found = _table_text(bare) if '\n' in bare and _record_text(bare) is None else _record_text(bare)
+    if found is None and len(bare) <= TAG_TEXT and re.search('<[a-zA-Z/][^<>]{0,40}>', bare):
+        plain = re.sub('</?(?:b|i|em|strong|span|a|u|small)\\b[^<>]{0,40}>', '', bare, flags=re.I)
+        plain = re.sub('</t[dh]>\\s*<t[dh][^<>]{0,40}>', ': ', plain, flags=re.I)
+        plain = re.sub('\\s*(?:<[^<>]{1,40}>\\s*)+', '\n', plain).strip()
+        if plain != bare and len(plain) >= 12:
+            return _records_text(plain)
+    if found is None and '\n' in bare:
+        lines = [re.sub('(?:[ ]{2,}|\t)', ': ', line.strip(), count=1) for line in bare.splitlines() if line.strip()]
+        spaced = '\n'.join(lines)
+        if spaced != bare:
+            return _record_text(spaced)
+    return found
+
+def _block_text(text: str) -> Any:
+    """A text field of a row that already has its own fields: read as a record only when wholly written as name=value parts."""
+    if len(text) < 5 or '=' not in text or not re.search('; | \\| |\\n', text):
+        return text
+    parts = [p for p in re.split(';\\s+|;$|\\s\\|\\s|\\n', text.strip()) if p.strip()]
+    if len(parts) < 2 or not all((re.fullmatch('[^=:]{1,40}=[^=]{0,200}', p.strip()) for p in parts)):
+        return text
+    return _attr_block(text) or text
+
+def _pairs_block(rows: list[Any], in_record: bool) -> dict[str, Any] | None:
+    """Attributes written as a list: objects of a name and a value, [name, value] lists, or, inside a record, short "name: value"
+    texts. A list of offers, of highlights or of notes is no such thing."""
+    if len(rows) < 2:
+        return None
+    out: dict[str, Any] = {}
+    first = rows[0]
+    if isinstance(first, dict):
+        if any((not isinstance(r, dict) or set(r) != set(first) or len(r) != 2 for r in rows)):
+            return None
+        keys = list(first)
+        if not re.search(PAIR_KEY, str(keys[0]), re.I):
+            return None
+        for row in rows:
+            name, value = row[keys[0]], row[keys[1]]
+            if not isinstance(name, str) or not 0 < len(name) <= BLOCK_NAME or isinstance(value, (dict, list)):
+                return None
+            out[name.strip()] = value
+        return out
+    if isinstance(first, (list, tuple)):
+        for row in rows:
+            if not isinstance(row, (list, tuple)) or len(row) != 2 or not isinstance(row[0], str) or isinstance(row[1], (dict, list)) or not 0 < len(row[0]) <= BLOCK_NAME:
+                return None
+            out[row[0].strip()] = row[1]
+        return out
+    if in_record and all((isinstance(r, str) for r in rows)):
+        for row in rows:
+            pair = _pair(row.strip(), ': ') or _pair(row.strip(), '=')
+            if not pair or len(pair[1]) > BLOCK_VALUE or len(pair[0].split()) > 3:
+                return None
+            out[pair[0]] = _plain(pair[1])
+        return out
+    return None
+
+def _column_rows(node: dict[str, Any]) -> dict[str, Any]:
+    """A result that names its columns once and gives each row as a list comes back with each row as an object."""
+    heads = [k for k, v in node.items() if isinstance(v, list) and len(v) >= 2 and all((isinstance(c, str) and re.fullmatch(FIELD_NAME, c) for c in v))]
+    for head in heads:
+        names = node[head]
+        for key, rows in node.items():
+            if key != head and isinstance(rows, list) and rows and all((isinstance(r, (list, tuple)) and len(r) == len(names) for r in rows)):
+                out = {k: v for k, v in node.items() if k != head}
+                out[key] = [dict(zip(names, row)) for row in rows]
+                return out
+    return node
+
+def _id_texts(record: dict[str, Any]) -> dict[str, Any]:
+    """A record's numeric identifier as text, the form the agent keys listings by (schemas turn it back when a tool wants a number)."""
+    if not any((isinstance(v, str) and ' ' in v for v in record.values())):
+        return record
+    return {k: str(v) if isinstance(v, int) and not isinstance(v, bool) and re.search(ID_FIELD, k, re.I) and abs(v) >= 100 else v for k, v in record.items()}
+
+def _keyed_rows(node: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """Rows given as an object keyed by listing code, each a record with the same fields, as a list of rows with their code."""
+    rows = list(node.values())
+    if len(rows) < 2 or not all((isinstance(r, dict) and len(r) >= RECORD_FIELDS for r in rows)) or not all((re.search('\\d', str(k)) and ' ' not in str(k) for k in node)):
+        return None
+    if len(set(rows[0]).intersection(*rows[1:])) < RECORD_FIELDS:
+        return None
+    return [r if any((re.search(ID_FIELD, str(x), re.I) for x in r)) else {'id': str(k), **r} for k, r in node.items()]
+
+def _holds_id(node: dict[str, Any]) -> bool:
+    return any((re.search(ID_FIELD, str(k), re.I) for k in node))
+
+def _flat_block(node: dict[str, Any]) -> dict[str, Any]:
+    """An attribute block with groups inside it, as one level: {"size": {"width": 3}} gives {"size width": 3}."""
+    if not any((isinstance(v, dict) for v in node.values())):
+        return node
+    out: dict[str, Any] = {}
+    for key, value in node.items():
+        if isinstance(value, dict):
+            out.update({f'{key} {inner}': v for inner, v in value.items() if not isinstance(v, (dict, list))})
+        else:
+            out[key] = value
+    return out
+
+def _restore_field(value: Any, depth: int, carded: bool, page: bool=True) -> Any:
+    """A field's value restored; a text only becomes a record when it reads as a listing, by an id, by a code among its values
+    or by many fields, so that a store's note written with colons and semicolons stays a note."""
+    found = _restore(value, depth + 1, carded, page)
+    if isinstance(value, str) and isinstance(found, dict) and len(found) < NOTE_FIELDS and not _holds_id(found) and not any((_id_like(v) for v in found.values())):
+        return value
+    return found
+
+def _restore(value: Any, depth: int=0, in_record: bool=False, page: bool=True) -> Any:
+    """A store result in the one form the rest of the agent reads: lists of row objects, a listing's attributes as a nested
+    object. Worlds spell results differently (race 15 gave each record as one text, its attributes "a=b; c=d" inside it, and
+    a result the agent cannot read leaves every record-based check blind), so the spelling is undone here, once, for all."""
+    if depth > 7:
+        return value
+    if isinstance(value, str):
+        found = _records_text(value)
+        return found if found is not None else value
+    if isinstance(value, list):
+        block = _pairs_block(value, in_record and page)
+        if block:
+            return block
+        return [_restore_field(v, depth, False, page) for v in value]
+    if isinstance(value, dict):
+        node = _id_texts(_column_rows(value))
+        carded = len(node) >= RECORD_FIELDS or _holds_id(node)
+        keyed = {k: _keyed_rows(v) if isinstance(v, dict) else None for k, v in node.items()}
+        node = {k: keyed[k] or v for k, v in node.items()}
+        listing = _holds_id(node) or any((_id_like(v) for v in node.values()))
+        out = {k: _restore_field(v, depth, carded, page) if not isinstance(v, str) or len(node) <= 2 else (_block_text(v) if listing else v) for k, v in node.items()}
+        if depth <= 3:
+            out = {k: _flat_block(v) if isinstance(v, dict) and any((isinstance(x, dict) for x in v.values())) and not any((isinstance(x, list) for x in v.values())) and isinstance(next(iter(v.values()), None), (dict, str, int, float)) and len(node) >= RECORD_FIELDS and not _holds_id(v) else v for k, v in out.items()}
+        if len(out) == 1:
+            only = next(iter(out.values()))
+            if isinstance(only, dict) and len(only) >= RECORD_FIELDS and isinstance(next(iter(value.values())), str):
+                return only
+        return out
+    return value
+
+_FIRST_SPELLING: dict[str, str] = {}
+
+def _join_twins(held: str, value: str) -> str:
+    """Two spellings' values as one list, each element once; the first spelling's value stays known, for measures of how a key's values read."""
+    between = '(?<!\\d),|,(?!\\d)'
+    have = {part.strip().lower() for part in re.split(between, held)}
+    extra: list[str] = []
+    for part in re.split(between, value):
+        if part.strip() and part.strip().lower() not in have:
+            have.add(part.strip().lower())
+            extra.append(part.strip())
+    if not extra:
+        return held
+    joined = (f'{held}, ' if held.strip() else '') + ', '.join(extra)
+    _FIRST_SPELLING[joined] = _FIRST_SPELLING.get(held, held)
+    return joined
+
+def _fold_twins(node: Any, depth: int=0) -> Any:
+    """One line per property: a block spelling a key twice keeps the first spelling, with both values when they differ, so that
+    one element of a list is enough ("clock shape: rectangle" and "clock_shape: rectangular, square" hold square). About a tenth
+    of the listings of races 13-15 and of a practice world hold such pairs with different values; read as a conflict, they
+    lost listings the store's answer accepted. Every repeated line also costs tokens on each later model turn."""
+    if depth > 5:
+        return node
+    if isinstance(node, list):
+        return [_fold_twins(v, depth + 1) for v in node]
+    if not isinstance(node, dict):
+        return node
+    out: dict[str, Any] = {}
+    seen: dict[str, str] = {}
+    for key, value in node.items():
+        name = _words(key)
+        first = seen.get(name)
+        if first is None:
+            seen[name] = key
+            out[key] = _fold_twins(value, depth + 1)
+        elif out[first] == value:
+            continue
+        elif isinstance(out[first], str) and isinstance(value, str) and not re.search(ID_FIELD, name, re.I):
+            out[first] = _join_twins(out[first], value)
+        else:
+            out[key] = _fold_twins(value, depth + 1)
+    return out if len(out) >= 2 or len(node) < 2 else {k: _fold_twins(v, depth + 1) for k, v in node.items()}
 
 def _dump(value: Any) -> str:
     try:
@@ -105,6 +487,9 @@ def _json_obj(text: Any) -> dict[str, Any] | None:
 def _words(key: str) -> str:
     key = re.sub('([a-z0-9])([A-Z])', '\\1 \\2', str(key))
     return re.sub('[\\s_.\\-]+', ' ', key).strip().lower()
+
+def _snake(key: str) -> str:
+    return _words(key).replace(' ', '_')
 
 def _stem(text: str) -> frozenset[str]:
     return frozenset((w[:-1] if len(w) > 3 and w.endswith('s') else w for w in _words(text).split()))
@@ -233,12 +618,13 @@ def _learn_id(rows: list[dict[str, Any]]) -> str | None:
     best = None
     for key in rows[0]:
         values = [row.get(key) for row in rows]
-        if not all((_id_like(v, 'id' in str(key).lower()) for v in values)):
+        named = bool(re.search(ID_FIELD, str(key), re.I))
+        if not all((_id_like(v, named) for v in values)):
             continue
         values = [v.strip() for v in values]
         if len(rows) > 1 and len(set(values)) < len(values):
             continue
-        score = ('id' in str(key).lower(), sum((len(v) for v in values)) / len(values))
+        score = (named, sum((len(v) for v in values)) / len(values))
         if best is None or score > best[0]:
             best = (score, key)
     return best[1] if best else None
@@ -252,6 +638,15 @@ def _in_rows(node: Any, ident: str, depth: int=0) -> bool:
         return any((_in_rows(v, ident, depth + 1) for v in node.values()))
     return False
 
+def _llm_within(seconds: float) -> ProxyClient:
+    """The model client whose timeout fits the time left: the usual one, or one with a timeout in whole 5 s steps."""
+    if seconds >= 50:
+        return _llm
+    limit = max(5, int(seconds) // 5 * 5)
+    if limit not in _llm_short:
+        _llm_short[limit] = ProxyClient(timeout=limit, max_retries=1, retry_delay=1)
+    return _llm_short[limit]
+
 def _fact_block(node: Any) -> dict[str, Any] | None:
     if not isinstance(node, dict):
         return None
@@ -262,6 +657,17 @@ def _fact_block(node: Any) -> dict[str, Any] | None:
             if len(scalars) >= 2 and (best is None or len(scalars) > len(best)):
                 best = scalars
     return best
+
+class _Stamped(list):
+    """A trace whose entries say when they happened."""
+
+    def __init__(self, clock: Any):
+        super().__init__()
+        self.clock = clock
+
+    def append(self, entry: dict[str, Any]) -> None:
+        entry.setdefault('at', round(self.clock(), 1))
+        super().append(entry)
 
 class Item:
 
@@ -287,6 +693,7 @@ class Kyo:
         if steps is None and isinstance(self.view.get('max_steps'), float):
             steps = int(self.view['max_steps'])
         self.max_steps = steps if steps and steps > 0 else 30
+        self.started = time.monotonic()
         self.step = 0
         self.finished = bool(self.view.get('finished'))
         self.broke = False
@@ -296,7 +703,7 @@ class Kyo:
         self.cost = 0.0
         self.calls = 0
         self.loop_calls = 0
-        self.trace: list[dict[str, Any]] = []
+        self.trace: list[dict[str, Any]] = _Stamped(self.clock)
         self.brief: dict[str, Any] = {}
         self.roles: dict[str, str] = {}
         self.items: list[Item] = []
@@ -344,6 +751,7 @@ class Kyo:
         self.verdicts: dict[str, bool] = {}
         self.confirmed: str | None = None
         self.completed = False
+        self.factless: set[tuple[str, str]] = set()
         self.id_key: str | None = None
         self.facts_from: dict[str, bool] = {}
         self.queued: list[str] = []
@@ -352,6 +760,7 @@ class Kyo:
         self.recent: list[str] = []
         self.chat: list[dict[str, Any]] = []
         self.opened: set[str] = set()
+        self.views: dict[str, set[str]] = {}
         self.refs: list[tuple[int, str]] = []
         self.ref_values: dict[str, str] = {}
         self.trails = 0
@@ -375,9 +784,30 @@ class Kyo:
         self.searched: list[dict[str, Any]] = []
         self.link_searches = 0
         self.link_seen: dict[str, list[str]] = {}
+        self.env_gap = ENV_GAP
+        self.env_spent = 0.0
+        self.env_count = 0
+        self.read_calls: dict[str, Any] = {}
+        self.read_args: dict[str, tuple[str, dict[str, Any]]] = {}
+        self.row_keys: set[str] = set()
+        self.env_at = 0.0
+        self.bare_pages: dict[str, int] = {}
+        self.page_args: dict[str, str] = {}
+        self.page_queries: dict[str, set[str]] = {}
 
     def left(self) -> int:
         return self.max_steps - self.step
+
+    def clock(self) -> float:
+        return time.monotonic() - self.started
+
+    def model_room(self) -> float:
+        return TASK_SECONDS - TIME_MARGIN - self.clock()
+
+    def rushed(self) -> bool:
+        """No room for a read the order does not need: that read and the order itself, at this run's store speed, must end inside the margin."""
+        pace = self.env_spent / self.env_count if self.env_count else 1.0
+        return self.model_room() <= 2 * max(pace, 1.0)
 
     def msgs_free(self) -> int:
         return self.msg_limit - self.msg_used - max(0, self.reserve - self.gate_msgs)
@@ -419,6 +849,9 @@ class Kyo:
         for model in models:
             if self.calls >= ALL_CALLS:
                 return None
+            if self.model_room() < CALL_FLOOR:
+                self.trace.append({'kind': 'late_call_skipped', 'at': round(self.clock(), 1)})
+                return None
             self.calls += 1
             tries = 0
             while True:
@@ -427,6 +860,8 @@ class Kyo:
                     return message
                 passing = status is None or status in (402, 408, 425, 429) or (isinstance(status, int) and status >= 500)
                 if not passing or tries >= (1 if status in (None, 408) else len(WAITS)) or self.waited + WAITS[tries] > WAIT_TOTAL:
+                    break
+                if self.model_room() - WAITS[tries] * 1.2 < CALL_FLOOR:
                     break
                 pause = WAITS[tries] * (0.8 + 0.4 * random.random())
                 self.waited += WAITS[tries]
@@ -450,7 +885,7 @@ class Kyo:
         if tools:
             body['tools'] = tools
             body['tool_choice'] = 'auto'
-        result = _llm.post_verbose('/inference/chat/completions', body)
+        result = _llm_within(self.model_room()).post_verbose('/inference/chat/completions', body)
         data = result.data
         if isinstance(data, dict) and data.get('choices'):
             usage = data.get('usage') or {}
@@ -483,17 +918,33 @@ class Kyo:
         payload = dict(self.binding)
         payload['step'] = self.step + 1
         payload['action'] = {'name': name, 'args': args}
+        rest = self.env_at + self.env_gap - time.monotonic()
+        if rest > 0:
+            time.sleep(rest)
+        self.env_at = time.monotonic()
         for _ in range(4):
+            began = time.monotonic()
             result = _env.post_verbose('/environment/call', payload)
+            self.env_spent += time.monotonic() - began
+            self.env_count += 1
             if isinstance(result.data, dict):
                 data = result.data
                 self.step = data['step'] if isinstance(data.get('step'), int) else self.step + 1
                 if data.get('finished'):
                     self.finished = True
+                if name != self.roles.get('ask'):
+                    data['observation'] = self.unspelled(name, data.get('observation'))
                 seen = data.get('observation')
-                if name in self.page_tools() and (not (isinstance(seen, dict) and seen.get('error'))):
+                self.note_read(name, args, seen)
+                if name == self.facts_tool() and isinstance(seen, dict) and not _failed(seen) and self.ident(seen) and not _fact_block(seen):
+                    self.factless.add((name, self.ident(seen)))
+                if name in self.page_tools() and (not (isinstance(seen, dict) and seen.get('error'))) and not _failed(seen):
+                    shown = _dump(seen)
                     for value in args.values():
-                        self.opened.update((v.strip() for v in (value if isinstance(value, list) else [value]) if isinstance(v, str)))
+                        named = [v.strip() for v in (value if isinstance(value, list) else [value]) if isinstance(v, str) and (not isinstance(value, list) or v.strip() in shown)]
+                        self.opened.update(named)
+                        for ident in named:
+                            self.views.setdefault(ident, set()).add(name)
                 return data
             error = result.error or {}
             status = error.get('status')
@@ -520,6 +971,31 @@ class Kyo:
                 return None
         return None
 
+    def unspelled(self, name: str, observation: Any) -> Any:
+        """The result in the form the agent reads (_restore); on a listing view, a record whose attributes sit among its own
+        keys gets them gathered into one object: the keys the search rows do not have, holding plain values."""
+        views = {self.roles.get('open'), self.roles.get('offer'), self.roles.get('compare')}
+        out = _fold_twins(_restore(observation, page=name in views or name != self.roles.get('search')))
+        if name not in views:
+            return out
+        self.row_keys.update((k for ident, row in self.rows.items() if ident not in self.opened for k in row))
+        known = self.row_keys
+        if not known:
+            return out
+
+        def gathered(record: Any) -> Any:
+            if not isinstance(record, dict) or _fact_block(record) or not self.ident(record, True):
+                return record
+            extra = {k: v for k, v in record.items() if k not in known and isinstance(v, (str, int, float)) and not isinstance(v, bool)}
+            if len(extra) < RECORD_FIELDS:
+                return record
+            return {**{k: v for k, v in record.items() if k not in extra}, 'attributes': extra}
+        if isinstance(out, dict) and self.ident(out):
+            return gathered(out)
+        if isinstance(out, dict):
+            return {k: [gathered(r) for r in v] if isinstance(v, list) else v for k, v in out.items()}
+        return out
+
     def read_request(self) -> None:
         lines = []
         for tool in self.tools:
@@ -535,6 +1011,11 @@ class Kyo:
             again = self.ask_json(prompt, [HEAVY], 2500) or {}
             if _items(again.get('items')) and isinstance(again.get('roles'), dict) and again['roles'].get('buy'):
                 brief = again
+        while not brief and not self.no_credit and self.calls < ALL_CALLS and self.clock() < BRIEF_BY:
+            time.sleep(BRIEF_GAP)
+            brief = self.ask_json(prompt, [LIGHT, HEAVY], 2500) or {}
+        if brief:
+            self.waited = 0
         self.brief = brief
         roles = brief.get('roles') if isinstance(brief.get('roles'), dict) else {}
         self.roles = {k: v for k, v in roles.items() if isinstance(v, str) and v in self.schemas}
@@ -557,7 +1038,7 @@ class Kyo:
         merged: list[Item] = []
         became: dict[int, int] = {}
         for old, item in enumerate(self.items, 1):
-            twin = next((m for m in merged if item.shelf.strip() and _words(m.shelf) == _words(item.shelf) and (not any((_words(a.split(':')[0]) == _words(b.split(':')[0]) and _words(a.partition(':')[2]) != _words(b.partition(':')[2]) for a in m.musts for b in item.musts)))), None)
+            twin = next((m for m in merged if item.shelf.strip() and m.qty == item.qty and _words(m.shelf) == _words(item.shelf) and (not any((_words(a.split(':')[0]) == _words(b.split(':')[0]) and _words(a.partition(':')[2]) != _words(b.partition(':')[2]) for a in m.musts for b in item.musts)))), None)
             if twin is None:
                 merged.append(item)
                 became[old] = len(merged)
@@ -706,6 +1187,8 @@ class Kyo:
             text += ' Steps are running low: settle on your picks, fill the cart and check out within the next few steps.'
         elif self.buys == 0 and (not self.cart_touched) and (self.step >= self.max_steps // 2):
             text += " Half the steps are used and the cart is empty: cart each item's fitting listing now (the store may still sell one out)."
+        if self.clock() >= WIND_DOWN and left > self.tail() + 1:
+            text += ' TIME IS NEARLY UP: set the cart to the chosen lines and check out within the next two turns; an episode that runs out of time earns nothing.'
         live = {need for _, need in self.needs_now()}
         lookups = [need for _, need in self.refs if need in live and need not in self.ref_values]
         if lookups and self.buys == 0:
@@ -829,10 +1312,11 @@ class Kyo:
                 if not name or name in done:
                     continue
                 done.add(name)
-                slot = group['keys'].setdefault(name, {'n': 0, 'values': [], 'per': {}})
+                slot = group['keys'].setdefault(name, {'n': 0, 'values': [], 'per': {}, 'plain': {}})
                 slot['n'] += 1
                 text = str(value).strip().lower()
                 slot['per'][ident] = text
+                slot['plain'][ident] = _FIRST_SPELLING.get(str(value).strip(), text).strip().lower()
                 if text not in slot['values']:
                     slot['values'].append(text)
         wanted = [(_words(item.shelf or ''), _words(item.name), {w for w in _stem(item.shelf or '') | _stem(item.name) if len(w) >= 4}) for item in self.items]
@@ -843,7 +1327,7 @@ class Kyo:
         for label, group in sorted(groups.items(), key=lambda kv: -kv[1]['n']):
             kept: list[tuple[str, dict[str, Any]]] = []
             for name, slot in sorted(group['keys'].items(), key=lambda kv: (-kv[1]['n'], len(kv[0]))):
-                values = list(slot['per'].values())
+                values = list(slot['plain'].values())
                 if not values:
                     continue
                 mean = sum((len(v) for v in values)) / len(values)
@@ -856,13 +1340,14 @@ class Kyo:
                 if twin is not None:
                     for ident, text in slot['per'].items():
                         twin['per'].setdefault(ident, text)
+                        twin['plain'].setdefault(ident, slot['plain'][ident])
                         if text not in twin['values']:
                             twin['values'].append(text)
                     twin['n'] = len(twin['per'])
                     continue
                 kept.append((name, slot))
             kept.sort(key=lambda kv: -kv[1]['n'])
-            for name, slot in kept[:14]:
+            for name, slot in kept[:TABLE_KEYS]:
                 table.append((label, name, slot['n'], [v[:40] for v in slot['values'][:4]]))
         return table
 
@@ -890,8 +1375,8 @@ class Kyo:
             wx, wy = (re.findall('[a-z0-9]+', x.lower()), re.findall('[a-z0-9]+', y.lower()))
             short, long = (wx, wy) if len(wx) <= len(wy) else (wy, wx)
             return x == y or (bool(short) and set(short) <= set(long) and (len(long) <= 2 * len(short) + 2))
-        both = [i for i in spec['per'] if i in slot['per'] and spec['per'][i].strip() and slot['per'][i].strip()]
-        same = sum((1 for i in both if agree(spec['per'][i], slot['per'][i])))
+        both = [i for i in spec['plain'] if i in slot['plain'] and spec['plain'][i].strip() and slot['plain'][i].strip()]
+        same = sum((1 for i in both if agree(spec['plain'][i], slot['plain'][i])))
         if not (a <= b or b <= a):
             return len(both) >= 2 and same == len(both)
         if both:
@@ -922,14 +1407,17 @@ class Kyo:
         value = (self.rows.get(ident) or {}).get(self.price_key) if self.price_key else None
         if isinstance(value, dict):
             value = next((v for v in value.values() if isinstance(v, (int, float)) and (not isinstance(v, bool))), None)
-        if isinstance(value, str) and re.fullmatch('\\s*\\d+(\\.\\d+)?\\s*', value):
-            value = float(value)
+        if isinstance(value, str):
+            figure = re.fullmatch('\\s*[^\\d\\s]{0,3}\\s?(\\d[\\d,]*(?:\\.\\d+)?)\\s*[A-Za-z]{0,6}\\.?\\s*', value)
+            value = float(figure.group(1).replace(',', '')) if figure else None
         return float(value) if isinstance(value, (int, float)) and (not isinstance(value, bool)) else None
 
     def buyable(self, ident: str) -> bool:
         if self.sold_out(ident):
             return False
         value = (self.rows.get(ident) or {}).get(self.stock_key) if self.stock_key else None
+        if isinstance(value, str) and re.search(STOCK_OUT, value.strip(), re.I):
+            return False
         return not (value is False or (isinstance(value, (int, float)) and (not isinstance(value, bool)) and (value <= 0)))
 
     def records_in(self, observation: Any) -> list[tuple[str, dict[str, Any]]]:
@@ -942,7 +1430,8 @@ class Kyo:
                 if isinstance(value, list):
                     found += [(i, r) for r in value if isinstance(r, dict) for i in [self.ident(r, True)] if i]
                 elif isinstance(value, dict):
-                    found += [(i, r) for v in value.values() if isinstance(v, list) for r in v if isinstance(r, dict) for i in [self.ident(r, True)] if i]
+                    inner = self.ident(value, False, 1)
+                    found += [(inner, value)] if inner else [(i, r) for v in value.values() if isinstance(v, list) for r in v if isinstance(r, dict) for i in [self.ident(r, True)] if i]
             return found
         if isinstance(observation, list):
             return [(i, r) for r in observation if isinstance(r, dict) for i in [self.ident(r, True)] if i]
@@ -1081,15 +1570,63 @@ class Kyo:
         lines = [f'{i} at {self.price_of(i):g}' for i in self.cart_ids() if self.price_of(i) is not None]
         return f"Not run yet (no step used). {self.left()} steps are left and the pick is the cheapest. Searches match a listing's title, so a requirement's value (often only in the attributes) finds few of the fitting listings, and rows come in no price order. Before checking out, run a few more searches for each item under other names for the product (its plain one-word name, synonyms, words from fitting titles you have seen) and look only at buyable rows priced below the cart's line" + (f" ({'; '.join(lines)})" if lines else '') + '; read the attributes of the cheapest such rows, swap in any that fits, then check out.'
 
+    def note_facts(self, tool: str, shown: bool) -> None:
+        """What a single-listing view showed: it shows attributes once any page had them, and none after two pages without."""
+        if shown:
+            self.facts_from[tool] = True
+        elif self.facts_from.get(tool) is not True:
+            self.bare_pages[tool] = self.bare_pages.get(tool, 0) + 1
+            if self.bare_pages[tool] >= 2:
+                self.facts_from[tool] = False
+
+    def lists_things(self, tool: str) -> bool:
+        """Whether a tool lists a shelf or takes search words rather than a listing's id."""
+        target = self.single_target(tool) or ''
+        return bool(re.search(SHELF_ARG, _snake(target), re.I) or re.search(QUERY_WORDS, _snake(target), re.I)) or tool in self.shapes
+
     def fill_facts(self, ids: list[str], keep: int) -> list[str]:
         tool = self.facts_tool()
         target = self.single_target(tool)
-        if not tool or not target:
+        if (not tool or not target) and self.compare_facts() is not True:
             return []
         texts = []
-        for ident in [i for i in ids if i in self.rows and i not in self.full and (not self.sold_out(i))]:
-            if self.left() <= keep or self.finished or self.facts_from.get(tool) is False:
+        wanted = [i for i in ids if i in self.rows and i not in self.full and (not self.sold_out(i))]
+        side = self.roles.get('compare')
+        many = self.compare_target()
+        unread: list[str] = []
+        while side and many and self.compare_facts() is True and len(wanted) >= 2 and self.left() > keep and not self.finished and not self.rushed():
+            room = self.compare_room()
+            batch, wanted = (wanted[:room], wanted[room:])
+            faults_side: list[str] = []
+            args_side = _shape({many: batch}, self.schemas.get(side), 'args', faults_side)
+            if faults_side:
+                wanted = batch + wanted
                 break
+            reply = self.act(side, args_side)
+            if reply is None:
+                wanted = batch + wanted
+                break
+            seen = reply.get('observation')
+            self.observe(side, seen)
+            self.note_view(side, seen)
+            rows = self.records_in(seen)
+            for ident, record in rows:
+                texts.append(f'{ident}: ' + self.show(record)[:1500])
+            if rows:
+                self.compare_ok = max(self.compare_ok, len(rows))
+                unread += [i for i in batch if i not in self.full]
+                continue
+            self.compare_bad = min(self.compare_bad or 999, len(batch))
+            wanted = batch + wanted
+            if self.compare_room() >= len(batch):
+                break
+        if not tool or not target:
+            return texts
+        for ident in unread + wanted:
+            if self.left() <= keep or self.finished or self.facts_from.get(tool) is False or self.rushed():
+                break
+            if (tool, ident) in self.factless:
+                continue
             faults: list[str] = []
             args = _shape({target: ident}, self.schemas.get(tool), 'args', faults)
             if faults:
@@ -1101,7 +1638,7 @@ class Kyo:
             self.observe(tool, seen)
             self.note_view(tool, seen)
             if isinstance(seen, dict) and self.ident(seen):
-                self.facts_from[tool] = self.facts_from.get(tool, False) or bool(_fact_block(seen))
+                self.note_facts(tool, bool(_fact_block(seen)))
             texts.append(f'{ident}: ' + self.show(seen)[:1500])
         if texts:
             self.trace.append({'kind': 'fill_facts', 'n': len(texts)})
@@ -1127,6 +1664,35 @@ class Kyo:
             picks += [i for i in pool[:2] if i not in picks]
         return self.fill_facts(picks[:CHEAPER_OPENS], self.tail() + 4)
 
+    def call_mark(self, name: str, args: dict[str, Any]) -> str:
+        """One spelling per call: words in any case and spacing, a number at its first value left out."""
+        props = (self.schemas.get(name) or {}).get('properties') or {}
+        kept: dict[str, Any] = {}
+        for key, value in sorted(args.items()):
+            spec = props.get(key) if isinstance(props.get(key), dict) else {}
+            first = value in (spec.get('minimum'), spec.get('default')) or (value == 1 and key == self.page_args.get(name) and spec.get('minimum') is None and spec.get('default') is None)
+            if isinstance(value, int) and not isinstance(value, bool) and first:
+                continue
+            kept[key] = ' '.join(value.lower().split()) if isinstance(value, str) else value
+        return name + _dump(kept)
+
+    def note_read(self, name: str, args: dict[str, Any], seen: Any) -> None:
+        """Remember what a search or listing call showed, whoever made it."""
+        if name in self.page_tools() or name in {self.roles.get(r) for r in ('ask', 'cart', 'cart_view', 'buy', 'refuse')}:
+            return
+        self.query_is_new(name, args)
+        if isinstance(seen, (dict, list)) and not _failed(seen):
+            self.read_calls[self.call_mark(name, args)] = seen
+            self.read_args[self.call_mark(name, args)] = (name, dict(args))
+
+    def query_is_new(self, name: str, args: dict[str, Any]) -> bool:
+        """Whether this search (its arguments apart from numbers) is the first of its kind, and remember it."""
+        mark = _dump({k: v for k, v in args.items() if isinstance(v, bool) or not isinstance(v, int)})
+        seen = self.page_queries.setdefault(name, set())
+        fresh = mark not in seen
+        seen.add(mark)
+        return fresh
+
     def observe(self, name: str, observation: Any) -> str:
         self.absorb(observation)
         lines = self.loose_lines(observation)
@@ -1147,14 +1713,15 @@ class Kyo:
             return
         if self.left() <= 12:
             return
-        cap = props[target].get('maxItems') if isinstance(props[target].get('maxItems'), int) else 4
-        ranked = self.item_groups()
-        share = max(1, cap // max(1, len(ranked)))
+        cap = min(props[target].get('maxItems') if isinstance(props[target].get('maxItems'), int) else 4, self.compare_room())
+        ranked = sorted(self.item_groups(), key=lambda ids: sum((1 for i in ids if i in self.full)))
+        lanes = [[i for i in ids if i not in self.full] for ids in ranked]
         picks: list[str] = []
-        for ids in ranked:
-            picks += [i for i in ids if i not in self.full][:share]
+        for round_of in range(cap):
+            picks += [lane[round_of] for lane in lanes if round_of < len(lane)]
         picks = picks[:cap]
         if len(picks) < 2:
+            self.fill_facts(picks, 12)
             return
         faults: list[str] = []
         args = _shape({target: picks}, schema, 'args', faults)
@@ -1169,6 +1736,9 @@ class Kyo:
             rows = self.records_in(seen)
             if rows:
                 self.facts_from[tool] = self.facts_from.get(tool, False) or any((_fact_block(r) for _, r in rows))
+                self.compare_ok = max(self.compare_ok, len(rows))
+            else:
+                self.compare_bad = min(self.compare_bad or 999, len(picks))
             self.trace.append({'kind': 'widen', 'ids': picks, 'opened': len(self.full) - before})
             if rows and self.facts_from.get(tool) is False:
                 self.widen_singly()
@@ -1180,6 +1750,7 @@ class Kyo:
                     reply = self.act(tool, args)
                     if reply is not None:
                         self.observe(tool, reply.get('observation'))
+                        self.compare_ok = max(self.compare_ok, len(self.records_in(reply.get('observation'))))
 
     def widen_singly(self) -> None:
         tool = self.facts_tool()
@@ -1207,7 +1778,7 @@ class Kyo:
     def ready_to_ask(self) -> bool:
         if self.asked or not self.roles.get('ask') or self.msgs_free() <= 0:
             return False
-        if self.left() <= 8:
+        if self.left() <= 8 or self.clock() > ASK_BY:
             return False
         opened = len(self.full)
         if opened >= 3 * len(self.items) + 1:
@@ -2152,13 +2723,13 @@ class Kyo:
             return ''
         since = max(self.step - 2, self.refused_at)
         stale = [i for i in self.cart_ids() if self.offer_seen.get(i, -99) < since and i not in self.gone]
-        if not stale or self.left() < len(stale) + 3:
+        if not stale or self.left() < len(stale) + 5:
             return ''
         lines = []
         for ident in stale:
             faults: list[str] = []
             args = _shape({target: ident}, self.schemas.get(tool), 'args', faults)
-            if faults:
+            if faults or self.rushed():
                 break
             before = dict(self.rows.get(ident) or {})
             reply = self.act(tool, args)
@@ -2348,7 +2919,8 @@ class Kyo:
             return str((self.rows.get(ident) or {}).get(cat_key) or '').strip().lower() if cat_key else ident
         plan: dict[str, int] = {}
         for number, ids in self.lead_items.items():
-            index = _count(number)
+            found = re.search('\\d+', str(number))
+            index = int(found.group()) if found else (1 if len(self.items) == 1 else None)
             pick = next((i for i in ids if not self.sold_out(i)), None)
             if pick and index and (1 <= index <= len(self.items)) and (kind(pick) not in {kind(p) for p in plan}):
                 plan[pick] = self.items[index - 1].qty
@@ -2538,7 +3110,7 @@ class Kyo:
                 self.cart_lines.pop(ident, None)
 
     def show(self, observation: Any) -> str:
-        text = _dump(_clip(observation, SHOW_CHARS))
+        text = _dump(_clip(observation, SHOW_CHARS if self.records_in(observation) else TEXT_CHARS))
         if len(text) > OBS_LIMIT:
             text = text[:OBS_LIMIT] + '...(cut)'
         return text
@@ -2660,7 +3232,7 @@ class Kyo:
             if name in readers and cached and (cached[0] == self.version):
                 out.append((cid, f'Not run (no step used): the same call at step {cached[1]} returned this, and nothing has changed since:\n' + cached[2][:3000]))
                 continue
-            if target and name in readers and (name != self.roles.get('compare')) and self.shown_already(name, str(args.get(target))):
+            if target and name in readers and (name != self.roles.get('compare')) and (self.shown_already(name, str(args.get(target))) or (name, str(args.get(target))) in self.factless):
                 out.append((cid, f'Not run (no step used): {args[target]} has shown everything this view gives since the last change. Its record: ' + self.record_of(str(args[target]))))
                 continue
             if many and isinstance(args.get(many), list) and args[many]:
@@ -2681,7 +3253,7 @@ class Kyo:
                     reread = self.reread_offers()
                     if self.note_sold:
                         self.find_sold()
-                    if self.cart_touched and self.cart_seen_at < self.cart_at and self.roles.get('cart_view') and (self.left() > 3):
+                    if self.cart_touched and self.cart_seen_at < self.cart_at and self.roles.get('cart_view') and (self.left() > 5) and not self.rushed():
                         faults = []
                         view_args = _shape({}, self.schemas.get(self.roles['cart_view']), 'args', faults)
                         view = self.act(self.roles['cart_view'], view_args) if not faults else None
@@ -2804,12 +3376,12 @@ class Kyo:
             if self.single_target(name) and name not in (self.roles.get('cart'), self.roles.get('buy'), self.roles.get('refuse'), self.roles.get('ask')):
                 listing = self.ident(observation) if isinstance(observation, dict) else None
                 if listing:
-                    self.facts_from[name] = self.facts_from.get(name, False) or bool(_fact_block(observation))
-                    if name == self.roles.get('open') and (not self.facts_from[name]):
-                        other = next((t for t in self.schemas if t != name and self.single_target(t) and (self.facts_from.get(t) is not False) and (t not in (self.roles.get('cart'), self.roles.get('buy'), self.roles.get('refuse'), self.roles.get('ask'), self.roles.get('search')))), None)
+                    self.note_facts(name, bool(_fact_block(observation)))
+                    if name == self.roles.get('open') and (self.facts_from.get(name) is False):
+                        other = next((t for t in self.schemas if t != name and self.single_target(t) and (self.facts_from.get(t) is not False) and (t not in (self.roles.get('cart'), self.roles.get('buy'), self.roles.get('refuse'), self.roles.get('ask'), self.roles.get('search'))) and not self.lists_things(t)), None)
                         if other:
                             self.roles['open'] = other
-                    if not self.facts_from[name] and name != self.roles.get('open') and (not self.roles.get('offer')):
+                    if self.facts_from.get(name) is False and name != self.roles.get('open') and (not self.roles.get('offer')):
                         self.roles['offer'] = name
                     if name == self.offer_tool():
                         self.offer_seen[listing] = self.step
@@ -2930,6 +3502,7 @@ class Kyo:
         self.trace.append({'kind': 'brief', 'brief': self.brief})
         opening = self.view.get('opening')
         if opening is not None:
+            opening = _restore(opening)
             self.absorb(opening)
         intro = "SHOPPER'S REQUEST:\n" + self.request
         if opening is not None:
@@ -2948,8 +3521,28 @@ class Kyo:
         return self.trace
 
     def work(self, loop_cap: int, spend_cap: float) -> None:
+        for _ in range(CRASH_TURNS):
+            try:
+                self.turns(loop_cap, spend_cap)
+                return
+            except Exception as exc:
+                self.trace.append({'kind': 'crash', 'error': f'{type(exc).__name__}: {exc}'[:400]})
+                self.answer_open_calls()
+
+    def answer_open_calls(self) -> None:
+        """Give every call of the last model turn a reply, so that the conversation stays one the model can continue."""
+        at = next((n for n in range(len(self.chat) - 1, -1, -1) if self.chat[n].get('tool_calls')), None)
+        if at is None:
+            return
+        done = {m.get('tool_call_id') for m in self.chat[at + 1:]}
+        for call in self.chat[at]['tool_calls']:
+            if call['id'] not in done:
+                self.chat.append({'role': 'tool', 'tool_call_id': call['id'], 'content': 'The call may not have run: something went wrong on the way. Look at the state before you repeat it.'})
+        self.chat.append({'role': 'user', 'content': self.status()})
+
+    def turns(self, loop_cap: int, spend_cap: float) -> None:
         idle = 0
-        while not self.finished and (not self.broke) and (self.left() > 0) and (self.loop_calls < loop_cap) and (self.cost < spend_cap):
+        while not self.finished and (not self.broke) and (self.left() > 0) and (self.loop_calls < loop_cap) and (self.cost < spend_cap) and (self.clock() < LAST_TURN or (not self.cart_ids() and self.model_room() > EMPTY_ROOM)):
             if self.ready_to_ask():
                 summary = self.interview()
                 if summary:
@@ -2960,8 +3553,12 @@ class Kyo:
             message = self.think(self.chat, [LIGHT, SPARE], 3000, self.offered())
             if message is None:
                 self.misses += 1
-                if self.no_credit or self.calls >= ALL_CALLS or self.misses > 2:
+                if self.no_credit or self.calls >= ALL_CALLS:
                     break
+                if self.misses > 2:
+                    if self.clock() >= OUTAGE_BY:
+                        break
+                    time.sleep(BRIEF_GAP)
                 continue
             calls = []
             for number, call in enumerate(message.get('tool_calls') or []):
@@ -2983,7 +3580,7 @@ class Kyo:
                 continue
             idle = 0
             committing = {self.roles.get('cart'), self.roles.get('buy'), self.roles.get('refuse')} - {None}
-            if not self.asked and self.roles.get('ask') and (self.msgs_free() > 0) and any((c['function']['name'] in committing for c in calls)) and (self.left() > 8):
+            if not self.asked and self.roles.get('ask') and (self.msgs_free() > 0) and any((c['function']['name'] in committing for c in calls)) and (self.left() > 8) and (self.clock() <= ASK_BY):
                 self.chat.append({'role': 'assistant', 'content': content or None, 'tool_calls': calls})
                 for call in calls:
                     self.chat.append({'role': 'tool', 'tool_call_id': call['id'], 'content': 'Not run (no step used): the shopper is asked first.'})
@@ -3004,7 +3601,7 @@ def agent_main(problem_data: dict[str, Any]) -> list[dict[str, Any]]:
     except Exception as exc:
         return [{'kind': 'crash', 'error': f'{type(exc).__name__}: {exc}'[:400]}]
     try:
-        return episode.run()
+        return list(episode.run())
     except Exception as exc:
         episode.trace.append({'kind': 'crash', 'error': f'{type(exc).__name__}: {exc}'[:400]})
         try:
@@ -3012,5 +3609,5 @@ def agent_main(problem_data: dict[str, Any]) -> list[dict[str, Any]]:
                 episode.finish()
         except Exception as again:
             episode.trace.append({'kind': 'crash', 'error': f'{type(again).__name__}: {again}'[:400]})
-        return episode.trace
+        return list(episode.trace)
 __all__ = ['agent_main']

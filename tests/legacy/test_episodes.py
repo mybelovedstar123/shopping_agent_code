@@ -95,5 +95,24 @@ def test_exception_during_a_run_still_returns_the_trace(play, monkeypatch, agent
 
     monkeypatch.setattr(agent.Kyo, "work", explode)
     trace, harness = play([])
-    assert {"kind": "crash", "error": "RuntimeError: boom"} in trace
+    assert [e["error"] for e in trace if e["kind"] == "crash"] == ["RuntimeError: boom"]
+    assert all("at" in event for event in trace), "every event says when it happened"
     assert harness.store_calls == ["decline"], "it still tries to end the episode after a crash"
+
+
+def test_exception_in_a_turn_is_recorded_and_the_episode_goes_on(play, monkeypatch, agent):
+    real = agent.Kyo.turns
+    raised = []
+
+    def flaky(self, *args):
+        if not raised:
+            raised.append(True)
+            raise RuntimeError("boom")
+        return real(self, *args)
+
+    monkeypatch.setattr(agent.Kyo, "turns", flaky)
+    trace, harness = play(
+        [("find", {"q": "lamp"}), ("add", {"id": "SKU-1001", "n": 1}), ("buy", {})]
+    )
+    assert [e["error"] for e in trace if e["kind"] == "crash"] == ["RuntimeError: boom"]
+    assert harness.store_calls[-1] == "buy"
