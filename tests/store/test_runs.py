@@ -271,6 +271,44 @@ def test_unanswered_question_times_out_and_the_run_ends(tmp_path):
     app.state.engine.dispose()
 
 
+def test_an_approval_just_before_the_timeout_is_not_reported_as_unanswered(
+    app, client, monkeypatch
+):
+    """The shopper approves after the run's last poll but before it gives up waiting."""
+    import threading
+
+    import kyo.store.runs as runs_module
+
+    last_poll_done, approved = threading.Event(), threading.Event()
+
+    class Clock:
+        """One poll, then the deadline: the approval lands in the only sleep."""
+
+        now = 0.0
+
+        def monotonic(self):
+            return self.now
+
+        def sleep(self, seconds):
+            last_poll_done.set()
+            approved.wait(10)
+            self.now += seconds
+
+    monkeypatch.setattr(runs_module, "time", Clock())
+    app.state.runs.question_timeout = app.state.runs.poll_seconds = 1.0
+    run_id = start(client, f"Buy a red mug. {NO_QUESTIONS}")
+    assert last_poll_done.wait(10)
+    question = open_question(client.get(f"/api/runs/{run_id}").json(), "approval")
+    url = f"/api/runs/{run_id}/questions/{question['id']}/decision"
+    decision = client.post(url, json={"approved": True, "card_number": GOOD})
+    approved.set()
+    assert decision.status_code == 200
+    app.state.runs.join(run_id)
+    run = client.get(f"/api/runs/{run_id}").json()
+    assert run["status"] == "purchased", run["result"]
+    assert run["result"]["order_id"] == decision.json()["order"]["id"] and orders(app) == 1
+
+
 def test_failure_inside_a_run_is_reported_not_raised(app, client, monkeypatch):
     import kyo.store.runs as runs_module
 

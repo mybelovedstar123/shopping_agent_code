@@ -8,7 +8,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from ..logs import log, scrub
@@ -189,10 +189,11 @@ class RunManager:
                     break
             time.sleep(self.poll_seconds)
         with transaction(self.sessions) as session:
+            # An answer can arrive after the last poll. Closing the question only if it is still
+            # open means either the answer or the timeout wins, never both.
+            if answer is None and not _close_question(session, question_id, None):
+                answer = session.get(AgentQuestion, question_id).answer
             run = session.get(AgentRun, run_id)
-            current = session.get(AgentQuestion, question_id)
-            if current.answered_at is None:
-                current.answered_at = now()
             if run.status == "waiting":
                 run.status = "running"
         return answer
@@ -282,6 +283,17 @@ def _open_question(
     return question
 
 
+def _close_question(session: Session, question_id: int, answer: str | None) -> bool:
+    """Answer a question unless it is already closed. Only one of two racing closers succeeds."""
+    closed = session.execute(
+        update(AgentQuestion)
+        .where(AgentQuestion.id == question_id, AgentQuestion.answered_at.is_(None))
+        .values(answer=answer, answered_at=now())
+        .execution_options(synchronize_session=False)
+    )
+    return closed.rowcount == 1
+
+
 def answer_question(
     session: Session, user_id: int, run_id: int, question_id: int, answer: str
 ) -> None:
@@ -325,9 +337,10 @@ def decide_approval(
                 run_id=run_id,
                 expected_total_cents=total,
             )
-            question = _open_question(session, user_id, run_id, question_id, "approval")
-            question.answer = f"approved:{order.id}"
-            question.answered_at = now()
+            _open_question(session, user_id, run_id, question_id, "approval")
+            if not _close_question(session, question_id, f"approved:{order.id}"):
+                # The run gave up waiting meanwhile. Raising undoes the order and the charge.
+                raise RunError("This question has already been answered.")
             return {"approved": True, "order": checkout.order_view(order)}
     except payments.PaymentDeclined:
         raise
