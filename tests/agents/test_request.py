@@ -72,6 +72,12 @@ def test_a_measurement_is_not_a_budget():
 def test_budget_scope_each():
     assert parse("Buy 2 mugs under $5 each.").budget_scope == "each"
     assert parse("Buy 2 mugs under $5.").budget_scope == "total"
+    assert parse("Buy 2 mugs, each under $5.").budget_scope == "each"
+
+
+def test_each_elsewhere_in_the_request_leaves_the_budget_a_total():
+    brief = parse("Buy 2 red desk lamps under $30. Each one must be red.")
+    assert brief.budget == 30 and brief.budget_scope == "total"
 
 
 @pytest.mark.parametrize(

@@ -118,8 +118,11 @@ def _spelled_money_to_digits(text: str) -> str:
     return re.sub(pattern, convert, text, flags=re.I)
 
 
-def _money(text: str) -> tuple[float | None, str]:
-    """Find the budget. Returns it and the text without that phrase."""
+PER_ITEM = r"(?:each|apiece|per item|per unit|a piece)"
+
+
+def _money(text: str) -> tuple[float | None, str, bool]:
+    """Find the budget. Returns it, the text without that phrase, and whether it is per item."""
     text = _spelled_money_to_digits(text)
     limit = (
         r"(?:,?\s*(?:for |of )?(?:nothing over|not over|under|below|less than|at most"
@@ -134,8 +137,15 @@ def _money(text: str) -> tuple[float | None, str]:
     for pattern in patterns:
         match = re.search(pattern, text, re.I)
         if match:
-            return float(match.group(1)), text[: match.start()] + " " + text[match.end() :]
-    return None, text
+            # Only words next to the amount make it a limit per item ("$5 each").
+            each = bool(
+                re.match(rf"\s*{PER_ITEM}\b", text[match.end() :], re.I)
+                or re.search(
+                    rf"\b{PER_ITEM}\s*(?:costing|at|for)?\s*$", text[: match.start()], re.I
+                )
+            )
+            return float(match.group(1)), text[: match.start()] + " " + text[match.end() :], each
+    return None, text, False
 
 
 def _pick(text: str) -> tuple[str, str]:
@@ -253,9 +263,9 @@ def parse_request(request: str, tools: list[dict[str, Any]]) -> Brief:
         step = {"step": "get the shopper's approval", "when": "order", "messages": 1}
         brief.process.append(step)
     brief.pick, brief.pick_measure = _pick(text)
-    if re.search(r"\b(each|per item|apiece)\b", text, re.I):
+    brief.budget, text, each = _money(text)
+    if each:
         brief.budget_scope = "each"
-    brief.budget, text = _money(text)
 
     sentences = [s for s in re.split(r"(?<=[.!?;])\s+", text) if s.strip()]
     wanted = next(

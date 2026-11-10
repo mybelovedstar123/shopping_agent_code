@@ -230,3 +230,11 @@ def test_two_items_of_one_kind_each_get_their_own_line():
         [mug("R", colour="red"), mug("U", colour="blue")],
     )
     assert result["outcome"] == "purchased" and store.order == {"R": 1, "U": 1}
+
+
+def test_each_in_another_sentence_does_not_lift_a_total_budget():
+    result, store = shop(
+        "Buy 2 red desk lamps under $30. Each one must be red. Do not ask me anything.",
+        [lamp("L1", 20)],
+    )
+    assert result["outcome"] == "declined" and store.order is None
