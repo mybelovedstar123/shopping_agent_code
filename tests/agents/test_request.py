@@ -158,6 +158,12 @@ def test_story_around_the_request_is_not_a_requirement():
     assert item.name == "mug" and item.musts == ["colour: blue"]
 
 
+@pytest.mark.parametrize("text, count", [("at most one question", 1), ("only two messages", 2)])
+def test_message_limit_written_in_words(text, count):
+    brief = parse(f"Buy a mug. Ask me {text}.")
+    assert brief.messages == count and [i.name for i in brief.items] == ["mug"]
+
+
 def test_message_limits():
     assert parse("Buy a mug.").messages == 3
     assert parse("Buy a mug. Ask me at most 2 questions.").messages == 2

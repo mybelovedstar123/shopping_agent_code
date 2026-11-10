@@ -258,11 +258,13 @@ def parse_request(request: str, tools: list[dict[str, Any]]) -> Brief:
     brief = Brief(request=request, roles=roles)
     text = " ".join(request.split())
 
+    count = r"\d+|one|two|three|four|five|six|seven|eight|nine|ten"
     match = re.search(
-        r"\b(?:at most|up to|only|ask me)?\s*(\d+) (?:questions?|messages?)\b", text, re.I
+        rf"\b(?:at most|up to|only|ask me)?\s*({count}) (?:questions?|messages?)\b", text, re.I
     )
     if match:
-        brief.messages = int(match.group(1))
+        word = match.group(1).lower()
+        brief.messages = int(word) if word.isdigit() else NUMBER_WORDS[word]
         text = text[: match.start()] + text[match.end() :]
     elif re.search(r"\b(don't|do not|no need to) (ask|message|contact)\b", text, re.I):
         brief.messages = 0
