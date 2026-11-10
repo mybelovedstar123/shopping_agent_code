@@ -72,6 +72,8 @@ QUESTION_BY = 210.0
 WIND_DOWN = 200.0
 LAST_TURN = 255.0
 EMPTY_ROOM = 12.0
+LATE_BY = 190.0
+LATE_STEPS = 8
 SCARCE_MESSAGES = 2
 LIST_SIZE = 12
 LIST_MIXED = 8
@@ -931,6 +933,7 @@ class Kyo:
         self.lane_found: dict[int, int] = {}
         self.lane_spent: dict[int, int] = {}
         self.lane_used: dict[int, set[str]] = {}
+        self.late_asked = False
         self.one_product: set[int] = set()
         self.list_asks = 0
         self.apart: dict[str, dict[int, list[str]]] = {}
@@ -2655,6 +2658,46 @@ class Kyo:
             summary += '\n[notes seen meanwhile] ' + ' | '.join(self.queued)
             self.queued = []
         return summary
+
+    def late_question(self) -> str:
+        """Before a checkout, ask the next planned question with a message the order itself does not need.
+
+        The interview leaves out every message the request keeps for a process step, whether the step comes with the
+        order or with an ending without a purchase. When Kyo is about to buy, the messages kept for the ending are
+        free. Race 13 allowed two messages: the base asked one question in 28 of 180 episodes and left a hidden need
+        undisclosed in 12 of them (no episode with an undisclosed need passed). Returns the summary for the loop model
+        when the answer adds a requirement, else ''."""
+        if self.late_asked or not self.roles.get('ask') or self.msg_used >= self.msg_limit:
+            return ''
+        if any((p['when'] == 'order' and p['messages'] > 0 for p in self.process)):
+            return ''
+        if self.left() < LATE_STEPS or self.clock() > LATE_BY or not self.judges():
+            return ''
+        self.late_asked = True
+        if not self.lanes:
+            self.lanes = self.plan_lanes(self.list_cap() if self.listing else 1)
+            self.lane_found = {n: 0 for n in self.lanes}
+            self.lane_spent = {n: 0 for n in self.lanes}
+            self.lane_used = {n: set() for n in self.lanes}
+        told: list[str] = []
+        budget = self.budget
+        batch = self.ask_next(told, LATE_STEPS - 2)
+        if not batch:
+            self.trace.append({'kind': 'late_ask', 'skipped': 'no property left to ask or no message sent'})
+            return ''
+        if self.budget != budget:
+            told.append(f'budget now {self.budget}')
+        number, question, answer = batch[0]
+        self.trace.append({'kind': 'late_ask', 'q': question, 'a': answer[:200], 'told': told})
+        if not told:
+            return ''
+        self.version += 1
+        summary = f'Kyo asked the shopper one more question before checking out (one step):\nQ: {question}\nA: {answer}\nNew firm requirements from this answer: ' + '; '.join(told) + '. The cart was not checked out: check each line against them (search again with the new values where needed), fix the cart, then check out.'
+        pointed = [need for _, need in self.refs if any((need in t for t in told))]
+        if pointed:
+            summary += ' These take their value from another listing: ' + ' | '.join(pointed) + '. Find that listing, open its page in full, and open every listing its page refers to; the last page gives the value.'
+        searched = self.value_search([number])
+        return summary + ('\n' + searched if searched else '')
 
     def search_template(self) -> tuple[str, dict[str, Any], str] | None:
         tool = self.roles.get('search')
@@ -4744,6 +4787,11 @@ class Kyo:
                     out.append((cid, done + (' [episode finished]' if self.finished else '')))
                     continue
                 args = self.quiet(name, args)
+            if self.is_buy(name, args):
+                late = self.late_question()
+                if late:
+                    out.append((cid, 'Not run yet. ' + late + '\nCart now: ' + self.cart_text()))
+                    continue
             if ending and self.left() >= 2:
                 go, said = self.gate('order' if self.is_buy(name, args) else 'end')
                 if not go:
