@@ -19,10 +19,39 @@ BRIEF_BY = 120.0
 BRIEF_GAP = 10.0
 OUTAGE_BY = 150.0
 SHOW_CHARS = 450
+HUNT_STEPS = 24
 ENV_GAP = 0.25
+OPEN_GAP = 0.5
 TABLE_KEYS = 18
+CHEAPER_SHOWN = 4
+OPEN_LATER = 2
+PAGE_ATTR_CHARS = 700
+PAGE_REST_CHARS = 300
+NO_NAME = ('none', 'null', 'n/a', 'unknown')
+TRAIL_ROOM = 15
+FIT_PAGES = 2
 CRASH_TURNS = 3
+OPEN_MIN_STEPS = 20
+OPEN_ROWS = 5
+OPEN_ITEMS = 2
+OPEN_SHARE = 5
+OPEN_EACH = 6
+OPEN_NOT = '\\b(?:not|no|other than|unlike|at most|at least|under|over|below|above|less|more|between|within|up to|or|same|listing)\\b'
+SHORT_KEEP = 8
+SET_SHOWN = 2
 STOCK_OUT = '^(?:no|none|false|0|n)$|out[ _-]?of[ _-]?stock|sold[ _-]?out|unavailable|not[ _-]?available'
+HUNT_WHOLE = 49
+HUNT_GRACE = 25.0
+HUNT_VALUE_CHARS = 30
+HUNT_ROUNDS = 2
+HUNT_KEEP = 10
+HUNT_IDLE = 4
+HUNT_PAGE_NEW = 5
+HUNT_FIT_WORDS = 4
+HUNT_FIT_OPENS = 4
+HUNT_COMMON = 0.6
+HUNT_BY = 200.0
+TITLE_CHARS = 200
 TEXT_CHARS = 3000
 OBS_LIMIT = 15000
 HISTORY_LIMIT = 150000
@@ -36,13 +65,24 @@ ASK_BY = 165.0
 WIND_DOWN = 200.0
 LAST_TURN = 255.0
 EMPTY_ROOM = 12.0
+CAP_ARG = '(?:^|_)(?:cap|max|maximum|ceiling|under|up_?to)(?:_|$)'
+CAP_NOT = 'result|row|page|count|size|num|item|step'
+CAP_PRICED = 'price|cost|budget|spend|money|amount'  # a limit argument's name, when no search has shown one holding yet
+CAP_LOW = '(?:^|_)(?:min|minimum|low|lowest|least|from|start|offset|floor)(?:_|$)'
+EARLY_TRAILS = 3  # chain rounds the early follow may spend; the checkout keeps its own
+CAP_CHANCE = 0.05  # how rarely rows drawn at random from their labels would all sit under a value, for that value to count as a limit held
+WALK_ROOM = 10  # steps beyond the finish a walk listing after the first needs: a refusal at the next checkout still needs a swap
+WALK_CALLS = 4  # capped shelf listings per cart line at one checkout (race 16: 456 rows on a shelf, 6 a page)
 SHELF_ARG = 'section|department|categor|label|shelf|aisle|(?<!age)(?:^|_)group(?:_name|_label)?$'
+LIST_MODE = 'field|filter|facet|brows|categor|list|structured'
+AMOUNT = '\\d[\\d.,]*\\s*[a-z"\']{1,12}'
+FLOOR = '\\b(?:at least|no (?:less|fewer) than|min(?:imum)?)\\s+(' + AMOUNT + ')\\s*$'
 QUERY_WORDS = '(?:^|_)(?:q|query|search|text|phrase|keywords?|terms?|words?)(?:_|$)|query|phrase|keyword'
 _llm = ProxyClient(timeout=50, max_retries=1, retry_delay=1)
 _llm_short: dict[int, ProxyClient] = {}
 _env = ProxyClient(timeout=95, max_retries=3, retry_delay=1)
 GUIDE = 'You are Kyo, a careful buyer working for one shopper in an online store. You can act only by calling the store\'s tools. The episode is graded 1 or 0: it earns 1 only when the finish is exactly right. A purchase must contain every requested item at the requested quantity, each meeting every requirement in force when you check out, inside the budget; or, when the store truly has nothing that meets everything, the episode must end with the no-purchase tool in the way the request asks.\n\nHOW THE STORE WORKS\n- Every tool call is one step and steps are limited; thinking costs nothing. Tool names, argument names and result shapes are particular to this store: read each tool\'s description and schema and use the exact argument names and allowed values.\n- Search tools can be narrow: a category filter, a keyword mode that may only read the first words of the query, a page size of a few rows, a token or offset for the next page. Compare the reported total with the rows you have seen and page on (with the exact token or offset the store gives) when the answer depends on seeing all of them. Keyword queries work best short and value-first (the wanted value plus the product noun). A filtered search that returns no rows usually means the filter value or the filter parameter is wrong: retry with the label exactly as result rows show it, or with another filter parameter.\n- Search rows are summaries. Stores split a listing\'s record differently: one view can show its attributes (properties), another only its offer and description, and a side-by-side view may carry either. The ledger names the tool that shows attributes once Kyo knows it. Judge every requirement on a property from those attributes, so read them for each listing you may buy; one call that shows several listings saves steps when it shows what you need. Never open a listing again when nothing has changed since you read it.\n- Questions to the shopper are handled for you by Kyo\'s interviewer, so you never message the shopper yourself. Its answers arrive in the conversation and are added to the ledger.\n- The request can also ask for steps along the way: an approval, a message, something to check or read first. The ledger lists them. Kyo carries out the ones due just before the order or the ending itself when you call the checkout or the ending tool, so never wait for those and never end without a purchase because of them; do any others with the store\'s tools (product questions go through Kyo\'s interviewer).\n\nWHAT COUNTS AS A FIT\n- The kind of product is decided by the listing\'s category label: only the label that matches the requested item as a whole counts, never a neighbouring one.\n- A requirement on a property is met when the listing\'s attribute for that property states the value. Key spelling does not matter (spaces, underscores, camel case, prefixes), and one element of a comma or slash list is enough. Values match by their words: case, singular or plural and plain synonyms are fine, and a value that contains the required value\'s words counts ("deep teal" meets teal, "extra roomy fit" meets roomy). A value with different words does not count (an abbreviation or code is not the word it stands for, and "teal green" is not "sea green"). Units are converted before comparing numbers, limits include the edge value, and a range must lie wholly inside a limit.\n- An attribute whose key names the requirement\'s property (under that name or a plain synonym) decides: if it says something else, the listing fails whatever other keys or the title say. A key for a different property, even a related one (a handle colour is not the body\'s colour), decides nothing about the requirement. Kyo adds [evidence] lines after opened listings with the keys whose names match a requirement.\n- When the listing has no attribute for that property, the wanted value stated under another attribute (for example a list of styles or features that includes it) or in the title or description counts. A number of another kind does not (a weight is not a capacity), nor a bare figure whose text does not say what it measures.\n- When the category label itself states a requirement\'s value (a season or audience in the label), that requirement is met by the category.\n- A requirement can point at another listing instead of giving a value ("the same X as the listing sold by <shop> with <property>", "within N of the X on the page of ..."). Resolve it first: find that listing (search its category, brand, shop or words), open its page in full with the single-item or side-by-side tool (a search row is not enough), and when that page refers you to a further listing for the property, find and open that one the same way; the last page gives the value. The order counts only when every page of that chain was opened. When the wanted value is anything but that other listing\'s value, the rule excludes only listings sharing that exact value, and never end without a purchase because of it alone.\n- When a listing you are about to buy sends you to another page for more about it, look at that page before you buy.\n- When one requested item must fit another (an accessory for a device), choose the two together from the listings\' own words (a list of what it fits, a model or series code that both pages carry). When no accessory that meets its own requirements fits the device you picked, switch to another device that meets its requirements and that such an accessory fits; never end without a purchase while that switch is untried.\n- Respect exclusions and closed lists. Wishes ("ideally", "would be nice") are tie-breakers only.\n- Never buy an item that the store shows as sold out; the total (price times quantity, summed over every line) may not exceed the budget; equal is fine.\n\nCHOOSING\n- When the request asks for the cheapest (lowest total, smallest price), the order must hold the lowest-priced listing among ALL listings that fit. Find the whole fitting set (page through it: result rows are often in no price order, and Kyo reads the next pages of a short result itself), check candidates in ascending price, and take the first that fully fits. When a search takes a maximum price, use it: list the category below the price of your current best pick, so only cheaper candidates are left to check.\n- When the request asks for the most or least of some measure, compare every fitting listing on that measure and take the extreme; a listing that does not state the measure cannot win.\n- Otherwise any listing that meets everything is right: do not waste steps hunting for something better.\n- Cart each item as soon as you have opened a listing that meets every requirement for it (with a cheapest, most or least pick: once you have compared the fitting set), then move on. Stores often sell out a carted line soon after it is added, and an early cart leaves steps to replace it.\n- A request for several different items needs one cart line per item, each at its requested quantity.\n\nCHANGES WHILE YOU WORK\n- The shopper or the store can change things: a new budget, a requirement added or dropped, a price change, a listing sold out. They appear inside tool results, often when you try to check out (a refusal); a note counts whichever tool\'s result shows it, and the ledger lists the requirements in force. The episode goes on after a refusal: apply every change, fix the cart and check out again.\n- Re-read a chosen listing\'s record shortly before checking out, because price and stock can change silently.\n\nFINISHING\n- Put exactly the chosen lines in the cart (remove anything else), look at the cart once, then check out with a call on its own.\n- End without a purchase only after a real search finds no listing that meets everything. Running short of steps proves nothing of the kind: then check out the best cart you have. Follow the request\'s wording for that ending, and when a remark is needed, keep it short and name no listing.\n- Every reply must call at least one tool. Keep your text short: what you know, then the next move.'
-BRIEF = 'You prepare a shopping task for an agent. Read the shopper\'s request and the store\'s tools and return ONE JSON object (compact, no indentation, nothing else) with these keys:\n\n"items": a list with one entry per distinct product the shopper wants bought, each {"name": the kind of product in the request\'s words, "shelf": the store\'s category label for it when a tool lists labels (copy it exactly), else "", "quantity": units of that one listing (integer, 1 when not stated; a pair or a set that is one listing counts as 1), "musts": a list of firm requirements on that product, each "property: constraint" with the exact value, limit, exclusion or closed list. Name the property with the request\'s own word for it ("meant for a lakeside occasion" gives "occasion: lakeside", "a 12-inch blade" gives "blade length: 12 inch"); do not swap it for a neighbouring property. A must whose value is read from another listing is ONE must holding the whole description of that listing ("rim colour: unlike the rim colour of the kettle Ovarno sells with a glass lid"): words that describe that other listing (its shop, its kind, "with <property> <value> and <property> <value>" after it) stay inside that one must and are never musts of this product}. Never put price, budget, stock or quantity into musts. The story around the request (the person meant to use it, where it will stand, what went wrong before, the occasion behind it) is context, not a must, unless it states a property\'s value or limit outright; and never turn words that are part of what the product is called (a season or an audience named with the product) into musts: those belong to "name". A use or occasion the request makes a property of the product itself ("blazers for business wear", "a dress made for parties", "the occasion has to be party") IS a must on that property ("occasion: business"), unless the store\'s category label already names it; an event, person or setting the product is bought for ("to wear at his wedding", "for a colleague"), and how it should sit, feel or look in use, stay context. A product the request names in one phrase joined by "and" (one "I want ..." with one quantity, often the name of one store department) is ONE item; make separate items only when the request gives each product its own quantity or its own requirements.\n"budget": the most the shopper will pay in total as a number in the request\'s own unit, or null.\n"budget_unit": that unit in words (for example "cents"), or null.\n"budget_scope": "total" when the limit covers the whole order, "each" when it is per item, null when there is no limit.\n"in_stock_only": true unless the request clearly accepts items that are not available.\n"pick": "cheapest" when the request asks for the lowest price or smallest total, "most" or "least" when it asks for the extreme of some measure, else "any". Remarks that money is tight are not a pick rule.\n"pick_measure": what is maximised or minimised for "most"/"least", else "".\n"messages": how many messages the shopper allows the agent to send (integer), or null when not stated.\n"steps": how many steps, moves or tool calls the request allows (integer), or null.\n"lookups": a list of the musts (copied exactly) whose value must first be read from another listing the request points at, else [].\n"rules": a list of every instruction the request gives about how to work or how to end, each in at most 12 words.\n"wishes": a list of things the shopper would merely like.\n"ask_first": a list of things the request explicitly says to check with the shopper before choosing (empty when none).\n"process": a list of the steps the request requires the agent to take besides finding and buying the right items (getting the shopper\'s approval, telling or showing the shopper something, checking something with them, reading something first, using a particular tool), each {"step": what must be done, in at most 15 words, "when": "choose" (before the products are chosen), "order" (right before checking out) or "end" (just before ending without a purchase), "messages": how many messages to the shopper it takes (0 when none)}; [] when the request asks for no such step. Requirements on the items, the budget, stock, the limits on messages and steps, and how to end when nothing fits are not steps.\n"quiet_decline": true when the request says not to suggest or name alternatives when nothing fits, false when it asks for them, null when it says nothing.\n"fits": a list of {"item": item number, "with": item number} for each requested item that the request says must work with, fit or suit ANOTHER requested item (the one the agent picks); [] when none.\n"roles": an object naming the exact tool for each job, or null when no tool does it: "search", "open" (shows one listing\'s attributes or properties; when two single-listing tools exist, the one whose description promises attributes, properties or specifications), "offer" (shows one listing\'s current offer, such as its price and stock, when that is a different tool from "open"), "compare" (several listings in full), "ask" (sends a message to the shopper), "cart" (changes the cart), "cart_view" (shows the cart), "buy" (checks out), "refuse" (ends without a purchase).\n"buy_args": the fixed arguments that make the "buy" tool check out (for a tool with a mode argument, that mode), else {}.\n"refuse_args": the fixed arguments that make the "refuse" tool end without a purchase, else {}.\n'
+BRIEF = 'You prepare a shopping task for an agent. Read the shopper\'s request and the store\'s tools and return ONE JSON object (compact, no indentation, nothing else) with these keys:\n\n"items": a list with one entry per distinct product the shopper wants bought, each {"name": the kind of product in the request\'s words, "shelf": the store\'s category label for it when a tool lists labels (copy it exactly), or the category the request itself names for it ("a coat in rainwear" gives "rainwear"), else "", "quantity": units of that one listing (integer, 1 when not stated; a pair or a set that is one listing counts as 1), "musts": a list of firm requirements on that product, each "property: constraint" with the exact value, limit, exclusion or closed list. Name the property with the request\'s own word for it ("meant for a lakeside occasion" gives "occasion: lakeside", "a 12-inch blade" gives "blade length: 12 inch"); do not swap it for a neighbouring property. A must whose value is read from another listing is ONE must holding the whole description of that listing ("rim colour: unlike the rim colour of the kettle Ovarno sells with a glass lid"): words that describe that other listing (its shop, its kind, "with <property> <value> and <property> <value>" after it) stay inside that one must and are never musts of this product}. Never put price, budget, stock or quantity into musts. The story around the request (the person meant to use it, where it will stand, what went wrong before, the occasion behind it) is context, not a must, unless it states a property\'s value or limit outright; and never turn words that are part of what the product is called (a season or an audience named with the product) into musts: those belong to "name". A use or occasion the request makes a property of the product itself ("blazers for business wear", "a dress made for parties", "a bag, and it is for a wedding", "the occasion has to be party") IS a must on that property ("occasion: business"), unless the store\'s category label already names it; a particular person\'s event, a person or a setting the product is bought for ("to wear at his wedding", "for a colleague"), and how it should sit, feel or look in use, stay context. A product the request names in one phrase joined by "and" (one "I want ..." with one quantity, often the name of one store department) is ONE item; make separate items only when the request gives each product its own quantity or its own requirements.\n"budget": the most the shopper will pay in total as a number in the request\'s own unit, or null.\n"budget_unit": that unit in words (for example "cents"), or null.\n"budget_scope": "total" when the limit covers the whole order, "each" when it is per item, null when there is no limit.\n"in_stock_only": true unless the request clearly accepts items that are not available.\n"pick": "cheapest" when the request asks for the lowest price or smallest total, "most" or "least" when it asks for the extreme of some measure, else "any". Remarks that money is tight are not a pick rule.\n"pick_measure": what is maximised or minimised for "most"/"least", else "".\n"messages": how many messages the shopper allows the agent to send (integer), or null when not stated.\n"steps": how many steps, moves or tool calls the request allows (integer), or null.\n"lookups": a list of the musts (copied exactly) whose value must first be read from another listing the request points at, else [].\n"rules": a list of every instruction the request gives about how to work or how to end, each in at most 12 words.\n"wishes": a list of things the shopper would merely like.\n"ask_first": a list of things the request explicitly says to check with the shopper before choosing (empty when none).\n"process": a list of the steps the request requires the agent to take besides finding and buying the right items (getting the shopper\'s approval, telling or showing the shopper something, checking something with them, reading something first, using a particular tool), each {"step": what must be done, in at most 15 words, "when": "choose" (before the products are chosen), "order" (right before checking out) or "end" (just before ending without a purchase), "messages": how many messages to the shopper it takes (0 when none)}; [] when the request asks for no such step. Requirements on the items, the budget, stock, the limits on messages and steps, and how to end when nothing fits are not steps.\n"quiet_decline": true when the request says not to suggest or name alternatives when nothing fits, false when it asks for them, null when it says nothing.\n"fits": a list of {"item": item number, "with": item number} for each requested item that the request says must work with, fit or suit ANOTHER requested item (the one the agent picks); [] when none.\n"roles": an object naming the exact tool for each job, or null when no tool does it: "search", "open" (shows one listing\'s attributes or properties; when two single-listing tools exist, the one whose description promises attributes, properties or specifications), "offer" (shows one listing\'s current offer, such as its price and stock, when that is a different tool from "open"), "compare" (several listings in full), "ask" (sends a message to the shopper), "cart" (changes the cart), "cart_view" (shows the cart), "buy" (checks out), "refuse" (ends without a purchase).\n"search_words": {"tool": the tool that searches listings by free words (when one tool lists a category and another takes words, the one that takes words), "field": its parameter that takes the words, "args": the fixed arguments that make it search by words (for a tool with a mode argument, that mode), else {}}.\n"buy_args": the fixed arguments that make the "buy" tool check out (for a tool with a mode argument, that mode), else {}.\n"refuse_args": the fixed arguments that make the "refuse" tool end without a purchase, else {}.\n'
 PLAN = 'You choose the questions a shopping agent sends to a shopper. Shoppers hold a few firm preferences they did not write down, each about one property of one requested product. A question reveals a preference only when it names that exact property; a property the shopper has no view on gets "don\'t mind", and one the shopper does not think about at all gets a puzzled reply, so every property named spends part of a message.\n\nYou get the request, the items with what the request already settles for each, and a numbered list of attribute keys seen on opened listings of each item\'s category, with how many of those listings carry the key and example values. An unwritten preference may be on a property that no listed key names.\n\nChoose the properties in this order:\n0. What the request itself asks you to check with the shopper (listed under ASK FIRST when there is any), each named by the property it is about.\n1. Hinted properties. The request\'s story often points at an unwritten preference without giving its value: a sentence about something the shopper cannot judge or leaves to you, someone whose taste decides, the product\'s looks or the setting it belongs in, the person meant to use or wear it, or what is inside it. For each such sentence, name the one property it points at and the item it is about, in the order the story gives them.\nName a hinted property by a listed key of that item when one fits the hint (a hint about who will wear it: the key for gender or audience; about its looks: the listed key for colour, pattern or finish that most of its listings carry); a property no listing of the item carries comes after the item\'s three most carried keys.\n2. Then the listed keys, ranked: favour the properties a buyer of that kind of product chooses between first (often its type or style, its form or fit, its size, capacity or dimensions, its material, colour or pattern, whichever that kind of product is bought by) and keys carried by most of the item\'s listings; once five or more listings were read, avoid keys seen on only one or two of them.\nSkip a property the request already settles for that item (a requirement names that property; a key whose values only repeat a required value, such as a pattern key showing the required decoration, is NOT settled), a second name for a property already chosen, a key whose values each list several purchase options at once, identifiers, model names, warranty and other logistics. Pack sizes, counts and quantities per pack are properties like any other, and a key marked [not the stated ...] is another property than that requirement, whatever words its name shares with it. Rank every item on its own: its hinted properties first, then its listed keys.\n"label" is the property\'s plain name: for a listed key, all of the key\'s words in plain spelling ("lid colour" for lidColour, "rim finish" for rim_finish; never shortened to "colour" or "finish"); only the property\'s name, no example values, no brackets, no second property.\nChoose up to COUNT for each item, best first. Return ONE JSON object and nothing else: {"ask": [{"item": item number, "label": "...", "hint": "at most 8 of the story\'s words it comes from, or an empty string"}]}, each item\'s picks in rank order'
 HEAR = 'A shopping agent asked a shopper some questions. Read each answer and return ONE JSON object and nothing else:\n{"needs": [{"item": item number, "need": "property: constraint", "points": true when the value is to be read from another listing, else false}], "drop": [{"item": item number, "property": "a requirement the shopper now gives up"}], "free": [{"item": item number, "property": "..."}], "crowded": [numbers of the questions whose answer complains that the message asked about too many things or wants a single question; not answers that only say they did not follow it], "budget": new total limit as a number or null}\n- "needs": every firm preference an answer states, with the exact value or limit and its unit ("at least 30 cm", "oval", "not wicker"). Name the need by the property the answer itself names, which may differ from the one asked about; several answers about one property make one need. Copy the value word for word as the answer says it, keeping its nouns and units ("at least 3 shelves", not "at least 3").\n- An answer can give the value by pointing at another listing (a value like, unlike or near the one on some shop\'s product, that product picked out by a few of its properties): that is ONE need on the property the answer names, with "points": true. Its value is the answer\'s own words copied exactly, from the comparison words to the end of that description, including what it says about a listing that page may name; never shorten or reword it. The properties describing the other product are not needs of this item.\n- "free": the property of each question the shopper said they do not mind about.\n- Folksy or roundabout wording that names a value still states that value.'
 NOTE = 'While a shopping agent works, the store showed this note (it may come from the shopper or the store). Return ONE JSON object and nothing else:\n{"kind": "change" when the note changes the task (budget, requirements, a price, availability, a refusal of the order), "error" when it only reports that a call was malformed or not accepted, "other" for anything else, "budget": the new total limit as a number in the request\'s unit, or null, "add": [{"item": item number, "need": "property: constraint"}], "drop": [{"item": item number, "need": "the requirement no longer wanted"}], "gone": [listing ids said to be unavailable], "sold_out": true when it says a chosen listing is gone, sold out or no longer available (even without naming it), "price_moved": true when it says a price changed, "summary": "one short sentence"}\nA replaced requirement is a drop of the old one plus an add of the new one. Report every change in the note.'
@@ -50,7 +90,7 @@ CHECK = 'You are the last check before a shopping agent checks out. Decide from 
 READING = 'the listing\'s attribute for a property decides when its key names that same property (any key spelling, one element of a list is enough, synonyms and unit conversions count, a value containing the required value\'s words counts, such as "deep teal" for teal, limits include the edge); a key for a different property, even a related one (a handle colour is not the body\'s colour), decides nothing; when no attribute names that property, the wanted value stated under another attribute or in the title or description counts (a bare figure that does not say what it measures counts for nothing); a requirement the category label itself states is met by that category; the category label must match the item; a rule of being unlike another listing\'s value counts as met unless the records show that same value; out-of-stock listings and listings that break the budget do not fit.'
 AUDIT = 'A shopping agent wants to end without buying because it thinks nothing fits. Check the listing records shown against the requirements, with these reading rules: ' + READING + '\nRecords marked ROW were seen only as a search result row: their page (the attributes) has not been read, so they can be neither passed nor failed on a property the row does not show.\nReturn ONE JSON object and nothing else: {"fits": {"item number": [listing ids that appear to meet every requirement, cheapest first, at most 4]}, "open": [ids of ROW listings of a requested kind, inside the budget, whose page could show that they fit, most promising first, at most 6], "reason": "one sentence"}'
 UNMIX = 'A shopper\'s request was read into firm requirements on a product. Some requirements take their value from another listing the request points at, and the words that pick out that other listing (its kind, its shop, the properties named after it with "with ...") are sometimes read by mistake as requirements on the product being bought. Using the request\'s wording, say which of the OTHER REQUIREMENTS below only describe that other listing. Return ONE JSON object and nothing else: {"describe_other": [those requirements copied exactly; empty when every one is a real requirement on the product]}'
-TRAIL = 'A shopping agent is about to check out. Some requirements take their value from another listing instead of stating it, and a listing\'s page can send the reader on to a further listing for that property. The order counts only when the agent has opened in full every listing along each such chain. Follow each requirement\'s chain from the requirement\'s own description, link by link, through the pages\' own words, using the records below (OPENED: the agent has opened that page; ROW: seen only as a search result row, its page not read).\nReturn ONE JSON object and nothing else: {"chains": [{"need": the requirement copied exactly, "links": [{"id": the listing id when a record below is that link, else "", "about": how the requirement or the previous page describes that listing, "find": "for a link not found: search words (its shop and the values the description gives)"}], "done": true when the last link is an OPENED page that states the property\'s value itself (also when the requirement asks for a value other than or unlike that one: the page\'s value is what it is measured against), else false, "value": the property\'s value as stated on that last page, or ""}]}\nA record is a link only when it matches the whole description of that link: the shop or brand, the kind of product AND every property value the description gives (for example "a 10 pieces multipack" rules out the same shop\'s listing with 10 capsules and no multipack); when no record matches all of it, that link is not found yet, even if the same shop sells other listings of that kind. Give "find" for such a link: the shop\'s name and the description\'s values, as a few search words.\nList each chain\'s links in order and stop at the first link whose page is not OPENED or not found, since its words are still unknown.'
+TRAIL = 'A shopping agent is about to check out. Some requirements take their value from another listing instead of stating it, and a listing\'s page can send the reader on to a further listing for that property. The order counts only when the agent has opened in full every listing along each such chain. Follow each requirement\'s chain from the requirement\'s own description, link by link, through the pages\' own words, using the records below (OPENED: the agent has opened that page; ROW: its page not read, seen only as a search result row or by its attributes).\nReturn ONE JSON object and nothing else: {"chains": [{"need": the requirement copied exactly, "links": [{"id": the listing id when a record below is that link, else "", "about": how the requirement or the previous page describes that listing, "find": "for a link not found: search words (its shop and the values the description gives)"}], "done": true when the last link is an OPENED page that states the property\'s value itself (also when the requirement asks for a value other than or unlike that one: the page\'s value is what it is measured against), else false, "value": the property\'s value as stated on that last page; when the requirement asks for what goes with that value and the page names what its value pairs with, that other value; or ""}]}\nA record is a link only when it matches the whole description of that link: the shop or brand, the kind of product AND every property value the description gives (for example "a 10 pieces multipack" rules out the same shop\'s listing with 10 capsules and no multipack); when no record matches all of it, that link is not found yet, even if the same shop sells other listings of that kind. Give "find" for such a link: the shop\'s name and the description\'s values, as a few search words.\nList each chain\'s links in order and stop at the first link whose page is not OPENED or not found, since its words are still unknown.'
 GATE = 'A shopping agent is about to STAGE. The shopper\'s request asks for the steps below along the way. Decide from the numbered RECORD of what the agent has done whether each step due before this STAGE is done for the cart as it is now. A step counts as done only when a RECORD line shows it being done and, for a step about the cart or the order, that line comes after the cart last changed and its reply grants it; questions on a product\'s properties do not do a step.\nWhen a step is still missing, give the one store call that does it next: a tool from TOOLS with its arguments. A message to the shopper goes through the messaging tool: one short sentence or question about that step alone, in plain words, naming no product properties or values the step does not need. Give no call when every due step is done or when the messages or steps left cannot do the missing one.\nReturn ONE JSON object and nothing else: {"steps": [{"step": the step, "done": true or false, "lines": [the RECORD line numbers that show it done]}], "call": {"tool": "...", "args": {...}} or null, "hold": what a reply asks to change before going on, or "", "needs": [{"item": item number, "need": "property: constraint"} for each firm requirement such a reply states]}'
 SWAP = "A listing in a shopping agent's cart has just sold out. Find replacements for that cart line among the other listing records shown, with these reading rules: " + READING + '\nReturn ONE JSON object and nothing else: {"fits": [{"id": listing id, "price": its price as a number as the record shows it} for every listing that appears to meet every requirement of the sold-out line\'s item, at most 6], "reason": "one sentence"}'
 SHAPE = 'A store tool returned the result below. Name its parts by the exact keys the result and the tool\'s parameters use. Return ONE JSON object and nothing else: {"rows": the key of the list of listings, "count": the key holding how many listings matched in all (not how many are shown), or null, "next": the key holding the value that asks for the following page, or null, "next_arg": the tool parameter that takes that value, or null, "price": the key, inside a row, of the listing\'s price, or null, "stock": the key, inside a row, that says whether the listing can be bought now, or null}'
@@ -60,27 +100,54 @@ GUARD_GAP = 0.34
 NOT_PROPERTY = '\\b(?:options?|variants?|models?|sku|ids?|codes?|asin|upc|ean|barcodes?|warrant\\w*|video|url|links?|images?|photos?|condition)\\b'
 CATCH_ALL = '^(?!.*\\b(?:types?|styles?|kinds?|shapes?)\\b).*\\b(?:features?|functions?|highlights?|specs?|specifications?|descriptions?|includ\\w*|accessor\\w*|extras?|misc\\w*)\\b'
 WIDEN_EACH = 6
-FIT_CODE = '[A-Z][A-Za-z]{0,5} ?\\d{3,6}'
-PART_CODE = '[A-Z]{1,4}\\d{3,6}'
+FIT_CODE = '[A-Z][A-Za-z]{0,5}[ -]?(?:\\d{3,6}|\\d{1,5}[xX]{1,3})'
+PART_CODE = '[A-Z]{1,5}\\d{0,3}-?\\d{3,7}'
+VALUE_ROOM = 12  # steps beyond the finish before a value search runs at all (race 16: limit 35, answers at about step 15)
+VALUE_KEEP = 8  # steps a value search leaves beyond the finish, for opening and buying what it found
+LINK_SEARCHES = 3  # series searched per item in a decline hunt (race 16: up to 9 series)
+LINK_ROWS = 3  # rows of one item carrying a series code before the codes count as a system (race 16 covers: nearly every row)
+LINK_FAMILIES = 12  # more distinct series than this are model numbers, not a system (race 16: 9)
 
 def _codes(text: Any) -> list[str]:
-    return [re.sub('\\s+', ' ', c).strip().lower() for c in re.findall('\\b' + FIT_CODE + '\\b', str(text or ''))]
+    found = re.findall('\\b' + FIT_CODE + '\\b', str(text or ''))
+    return [re.sub('[\\s-]+', ' ', c).strip().lower() for c in found if not re.fullmatch('[A-Z][a-z]+ (?:19|20)\\d\\d', c)]
+
+def _code_hit(pattern: str, code: str) -> bool:
+    """Whether a code a part names covers a device's code: the same letters and digits, or a series written with trailing
+    x's ("abc12xx" covers "abc1234"); spaces and hyphens do not count."""
+    wide, plain = (re.sub('[\\s-]+', '', pattern), re.sub('[\\s-]+', '', code))
+    stem = wide.rstrip('x')
+    if stem != wide and stem[-1:].isdigit():
+        return plain.startswith(stem) and len(plain) == len(wide)
+    return wide == plain
 
 def _fit_marks(text: Any) -> dict[str, Any]:
     text = str(text or '')
     own = re.search('[\\[(]\\s*(?:part\\s+)?(' + PART_CODE + ')\\s*[\\])]', text, re.I)
     codes: list[str] = []
-    for hit in re.finditer('\\bmodel\\s*(?:no\\.?|number|#)\\s*[:.]?\\s*(' + FIT_CODE + ')\\b', text, re.I):
+    for hit in re.finditer('\\bmodel\\s*(?:no\\.?|number|#)?\\s*[:.]?\\s*(?!(?:no|number)\\b)(' + FIT_CODE + ')\\b', text, re.I):
         codes += _codes(hit.group(1))
     for hit in re.finditer('\\b(?:also sold as|also known as|sold also as)\\s+([^.;]+)', text, re.I):
         codes += _codes(hit.group(1))
     works: list[str] = []
+    bars: list[str] = []
     for hit in re.finditer('\\b(?<!not )(?<!never )(?:works with|compatible with|fits)\\s*:?\\s+([^.;]+)', text, re.I):
         if not re.search('\\bpart\\s+' + PART_CODE + '\\s+also\\s+$', text[max(0, hit.start() - 40):hit.start()], re.I):
-            works += _codes(hit.group(1))
+            cut = re.split('(?i)\\b(?:except|excluding|but not)\\b', hit.group(1), maxsplit=1)
+            works += _codes(cut[0])
+            bars += _codes(cut[1]) if len(cut) > 1 else []
     also = [(hit.group(1).upper(), _codes(hit.group(2))) for hit in re.finditer('\\bpart\\s+(' + PART_CODE + ')\\s+also fits\\s*:?\\s*([^.;]+)', text, re.I)]
     more = re.search('\\b(?:more|details|see|read)\\s+(?:on|at|under|about)?\\s*(?:the\\s+)?part\\s+(' + PART_CODE + ')', text, re.I)
-    return {'own': own.group(1).upper() if own else '', 'codes': codes, 'works': works, 'also': also, 'more': more.group(1).upper() if more else ''}
+    fam, named = _series_marks(text)
+    return {'own': own.group(1).upper() if own else '', 'codes': codes, 'works': works, 'bars': bars, 'also': also, 'more': more.group(1).upper() if more else '', 'fam': fam, 'named': named}
+
+def _series_marks(text: str) -> tuple[list[str], list[str]]:
+    """The series a record's own codes start with ("AB1" of "AB1-2345") and the bare series-like words it names outside a clause that
+    excludes them. Which bare words are series is decided against the codes other records carry (Kyo.link_system)."""
+    fam = {hit.upper() for hit in re.findall('\\b([A-Za-z]{1,5}\\d{1,3})-\\d{2,7}\\b', text)}
+    rest = re.sub('\\b[A-Za-z]{1,5}\\d{1,3}-\\d{2,7}\\b', ' ', text)
+    rest = re.sub('(?i)\\b(?:except|excluding|but not|not for|not compatible with|does not (?:fit|take))\\b[^.;]*', ' ', rest)
+    return sorted(fam), sorted({hit.upper() for hit in re.findall('\\b[A-Za-z]{1,5}\\d{1,3}\\b', rest)})
 PAIR_MARKS = (': ', ' = ', '=', ' -> ', ' - ')
 FIELD_MARKS = (' | ', '\n', ' || ', ' ; ', '; ', '\t', ' // ', ' · ', ' • ', '|', ';', ', ')
 FIELD_NAME = "[A-Za-z][A-Za-z0-9_ ./&'()-]{0,38}"
@@ -419,6 +486,20 @@ def _join_twins(held: str, value: str) -> str:
     _FIRST_SPELLING[joined] = _FIRST_SPELLING.get(held, held)
     return joined
 
+def _glued(text: str) -> str:
+    """A number and its short unit as one word, however it is spelled: "65 W" and "65W" are one value, "45 W" another."""
+    return re.sub('(\\d)\\s+([a-z]{1,3})(?![a-z0-9])', '\\1\\2', text.lower())
+
+def _text_words(text: str) -> set[str]:
+    """The words of a row or a search, a number and its short unit also as one word."""
+    low = text.lower()
+    return set(re.findall('[a-z0-9]+', low)) | set(re.findall('[a-z0-9]+', _glued(low)))
+
+def _value_tokens(value: str) -> list[str]:
+    """A value's words a search or a row can hold: long ones, else short ones of two characters holding a letter (XL, 4g, 65w), else its numbers."""
+    low = _glued(value)
+    return re.findall('[a-z0-9]{3,}', low) or re.findall('[0-9]+[a-z]|[0-9]*[a-z][a-z0-9]+', low) or re.findall('[0-9]+', low)
+
 def _fold_twins(node: Any, depth: int=0) -> Any:
     """One line per property: a block spelling a key twice keeps the first spelling, with both values when they differ, so that
     one element of a list is enough ("clock shape: rectangle" and "clock_shape: rectangular, square" hold square). About a tenth
@@ -658,6 +739,20 @@ def _fact_block(node: Any) -> dict[str, Any] | None:
                 best = scalars
     return best
 
+def _soft(fallback: Any) -> Any:
+    """A method that adds to the episode but is not needed for it: if it fails, the trace says so and the episode goes on."""
+
+    def wrap(method: Any) -> Any:
+
+        def guarded(self: Any, *args: Any, **kwargs: Any) -> Any:
+            try:
+                return method(self, *args, **kwargs)
+            except Exception as exc:
+                self.trace.append({'kind': 'soft_crash', 'where': method.__name__, 'error': f'{type(exc).__name__}: {exc}'[:300]})
+                return fallback() if callable(fallback) else fallback
+        return guarded
+    return wrap
+
 class _Stamped(list):
     """A trace whose entries say when they happened."""
 
@@ -751,7 +846,11 @@ class Kyo:
         self.verdicts: dict[str, bool] = {}
         self.confirmed: str | None = None
         self.completed = False
+        self.link_tried: set[str] = set()
+        self.adopted: dict[str, int] = {}
+        self.capped: set[tuple[str, float]] = set()
         self.factless: set[tuple[str, str]] = set()
+        self.trail_room: int | None = None
         self.id_key: str | None = None
         self.facts_from: dict[str, bool] = {}
         self.queued: list[str] = []
@@ -761,6 +860,8 @@ class Kyo:
         self.chat: list[dict[str, Any]] = []
         self.opened: set[str] = set()
         self.views: dict[str, set[str]] = {}
+        self.fit_cached: tuple[Any, dict[str, Any]] | None = None
+        self.owners_seen: dict[tuple[str, int], int] = {}
         self.refs: list[tuple[int, str]] = []
         self.ref_values: dict[str, str] = {}
         self.trails = 0
@@ -784,14 +885,24 @@ class Kyo:
         self.searched: list[dict[str, Any]] = []
         self.link_searches = 0
         self.link_seen: dict[str, list[str]] = {}
+        self.hunts = 0
         self.env_gap = ENV_GAP
         self.env_spent = 0.0
         self.env_count = 0
         self.read_calls: dict[str, Any] = {}
         self.read_args: dict[str, tuple[str, dict[str, Any]]] = {}
+        self.value_rows: set[str] = set()
         self.row_keys: set[str] = set()
+        self.refuse_trailed = False
         self.env_at = 0.0
+        self.hunt_stem: dict[tuple[int, tuple[str, ...]], str] = {}
+        self.hunt_no_noun: set[int] = set()
         self.bare_pages: dict[str, int] = {}
+        self.code_tries: list[bool] = []
+        self.codes_dead = False
+        self.fit_hunted = False
+        self.hunt_mark = ''
+        self.hunt_tried: dict[int, set[str]] = {}
         self.page_args: dict[str, str] = {}
         self.page_queries: dict[str, set[str]] = {}
 
@@ -814,6 +925,27 @@ class Kyo:
 
     def cart_mark(self) -> str:
         return _dump(sorted(self.cart_lines.items()))
+
+    def row_ids(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+        """A listing tool called with a code that one seen row's title holds gets that row's id; anything else stays as it was sent."""
+        if name not in {self.roles.get(job) for job in ('open', 'offer', 'compare', 'cart')} or not self.rows:
+            return args
+        title = self.title_key()
+        if not title:
+            return args
+
+        props = (self.schemas.get(name) or {}).get('properties') or {}
+
+        def known(value: Any, key: str) -> Any:
+            if not isinstance(value, str) or value.strip() in self.rows or not 3 <= len(value.strip()) <= 30 or not re.search('\\d', value) or 'enum' in (props.get(key) or {}):
+                return value
+            pattern = '(?<![a-z0-9])' + re.escape(value.strip().lower()) + '(?![a-z0-9])'
+            hits = [i for i, row in self.rows.items() if re.search(pattern, str(row.get(title) or '').lower())]
+            if len(hits) == 1:
+                self.trace.append({'kind': 'row_id', 'sent': value, 'id': hits[0]})
+                return hits[0]
+            return value
+        return {key: [known(v, key) for v in value] if isinstance(value, list) else known(value, key) for key, value in args.items()}
 
     def page_tools(self) -> set[str]:
         page = self.roles.get('offer') or self.roles.get('open')
@@ -1541,7 +1673,8 @@ class Kyo:
         def priced(key: str) -> bool:
             spec = props.get(key) if isinstance(props.get(key), dict) else {}
             return bool(re.search('price|cost|amount|budget|spend|money', key + ' ' + str(spec.get('description') or ''), re.I))
-        caps = [k for k, v in args.items() if k in props and isinstance(v, (int, float)) and (not isinstance(v, bool)) and re.search('max|most|under|below|limit|cap|upto|up_to', k, re.I) and priced(k)]
+        limits = self.cap_keys(name)
+        caps = [k for k, v in args.items() if k in props and isinstance(v, (int, float)) and (not isinstance(v, bool)) and (re.search('max|most|under|below|limit|cap|upto|up_to', k, re.I) and priced(k) or k in limits[:1] and len(limits) == 1)]
         if not caps or not self.price_key:
             return ''
         caps.sort(key=lambda k: args[k])
@@ -1568,7 +1701,7 @@ class Kyo:
             return ''
         self.wider_held = True
         lines = [f'{i} at {self.price_of(i):g}' for i in self.cart_ids() if self.price_of(i) is not None]
-        return f"Not run yet (no step used). {self.left()} steps are left and the pick is the cheapest. Searches match a listing's title, so a requirement's value (often only in the attributes) finds few of the fitting listings, and rows come in no price order. Before checking out, run a few more searches for each item under other names for the product (its plain one-word name, synonyms, words from fitting titles you have seen) and look only at buyable rows priced below the cart's line" + (f" ({'; '.join(lines)})" if lines else '') + '; read the attributes of the cheapest such rows, swap in any that fits, then check out.'
+        return f"Not run yet (no step used). {self.left()} steps are left and the pick is the cheapest. Searches may read only part of a listing, so a requirement's value finds only some of the fitting listings, and rows come in no price order. Before checking out, run a few more searches for each item under other names for the product (its plain one-word name, synonyms, words from fitting titles you have seen) and look only at buyable rows priced below the cart's line" + (f" ({'; '.join(lines)})" if lines else '') + '; read the attributes of the cheapest such rows, swap in any that fits, then check out.'
 
     def note_facts(self, tool: str, shown: bool) -> None:
         """What a single-listing view showed: it shows attributes once any page had them, and none after two pages without."""
@@ -1644,6 +1777,156 @@ class Kyo:
             self.trace.append({'kind': 'fill_facts', 'n': len(texts)})
         return texts
 
+    def show_links(self, ids: list[str], keep: int) -> None:
+        """Run the part code a cart line sends the reader to through the search, once per code, and open
+        the page it finds when steps allow; the result feeds the ledger, not the model. Multi-line carts only."""
+        plan = self.value_template()
+        if not plan or (len(self.items) < 2 and len(ids) < 2):
+            return
+        tool, base, field = plan
+        for ident in ids:
+            marks = self.fit_index()['marks']
+            code = (marks.get(ident) or {}).get('more')
+            if not code or code in self.link_tried or any((mark.get('own') == code for mark in marks.values())):
+                continue
+            if self.left() <= keep or self.finished or self.rushed():
+                return
+            self.link_tried.add(code)
+            faults: list[str] = []
+            args = _shape({**base, field: code}, self.schemas.get(tool), 'args', faults)
+            if faults:
+                return
+            reply = self.act(tool, args)
+            if reply is None:
+                return
+            self.observe(tool, reply.get('observation'))
+            self.trace.append({'kind': 'show_link', 'line': ident, 'code': code})
+            marks = self.fit_index()['marks']
+            self.fill_facts([i for i, mark in marks.items() if mark.get('own') == code], max(keep, self.tail() + 6))
+
+    def cap_template(self) -> tuple[str, dict[str, Any], str, str] | None:
+        """The listing tool that takes a shelf and a maximum price, with the mode it needs: the mode an earlier listing by
+        shelf used, else the one option naming a listing. None when no tool or mode is clear."""
+        for tool, schema in self.schemas.items():
+            props = (schema or {}).get('properties') or {}
+            caps = self.cap_keys(tool)
+            shelves = [k for k, v in props.items() if isinstance(v, dict) and 'string' in _kinds(v) and 'enum' not in v and re.search(SHELF_ARG, _snake(k), re.I)]
+            if len(caps) != 1 or len(shelves) != 1:
+                continue
+            learned = [(dict(mode), held) for (key, mode), held in self.cap_modes(tool).items() if key == caps[0]]
+            options_args = [k for k, v in props.items() if isinstance(v, dict) and isinstance(v.get('enum'), list) and len(v['enum']) >= 2]
+            single = len(options_args) == 1 and options_args[0] in ((schema or {}).get('required') or [])
+            base: dict[str, Any] = {}
+            for key, spec in props.items():
+                options = spec.get('enum') if isinstance(spec, dict) else None
+                if not isinstance(options, list) or len(options) < 2:
+                    continue
+                pick = next((mode[key] for mode, held in learned if held and key in mode), None)
+                if pick is None:
+                    pick = next((a[key] for a in reversed(self.searched) if shelves[0] in a and key in a and not any(k != shelves[0] and not (isinstance(props.get(k), dict) and 'enum' in props[k]) and isinstance(v, str) and v.strip() and re.search(QUERY_WORDS, _snake(k), re.I) for k, v in a.items())), None)
+                    named = [o for o in options if isinstance(o, str) and re.search(LIST_MODE, o, re.I)]
+                    worded = {a[key] for a in self.searched if key in a and any(isinstance(v, str) and v.strip() and re.search(QUERY_WORDS, _snake(k), re.I) for k, v in a.items())}
+                    unworded = [o for o in options if o not in worded]
+                    pick = pick if pick is not None else named[0] if len(named) == 1 else unworded[0] if single and worded and len(unworded) == 1 else None
+                spoiled = {mode[key] for mode, held in learned if not held and key in mode} if single else set()
+                if spoiled and (pick is None or pick in spoiled):
+                    rest = [o for o in options if o not in spoiled]
+                    pick = rest[0] if len(rest) == 1 else None
+                if pick is None:
+                    return None
+                base[key] = pick
+            return (tool, base, shelves[0], caps[0])
+        return None
+
+    def cap_keys(self, tool: str) -> list[str]:
+        """The numeric arguments of `tool` that may cap a listing's price: those a search has shown holding a limit, else those whose
+        name says a maximum, else those whose name says a price or budget."""
+        props = (self.schemas.get(tool) or {}).get('properties') or {}
+        numbers = [k for k, v in props.items() if isinstance(v, dict) and {'integer', 'number'} & set(_kinds(v)) and not re.search(CAP_NOT, k, re.I) and not re.search(CAP_LOW, _snake(k), re.I)]
+        held = {key for (key, _), ok in self.cap_modes(tool).items() if ok}
+        named = [k for k in numbers if re.search(CAP_ARG, _snake(k), re.I)]
+        priced = [k for k in numbers if re.search(CAP_PRICED, _snake(k), re.I)]
+        for group in ([k for k in numbers if k in held], [k for k in named if k in priced], priced, named):
+            if group:
+                return group
+        return []
+
+    def cap_modes(self, tool: str) -> dict[tuple[str, tuple[tuple[str, Any], ...]], bool]:
+        """What the searches of `tool` so far show of each numeric argument as a price limit, by argument and mode (the call's option
+        arguments): False once a call's rows held one priced above its value; True when a call's rows all sat at or below it and rows drawn
+        at random from the known rows of their labels would rarely have (CAP_CHANCE), so the limit, not the query, kept dearer rows out."""
+        props = (self.schemas.get(tool) or {}).get('properties') or {}
+        cat_key = self.category_key()
+        out: dict[tuple[str, tuple[tuple[str, Any], ...]], bool] = {}
+        prices: dict[str, list[float]] = {}
+        for ident, row in self.rows.items():
+            price = self.price_of(ident)
+            if price is not None:
+                prices.setdefault(str(row.get(cat_key) or '').strip().lower() if cat_key else '', []).append(price)
+        for mark, (name, args) in self.read_args.items():
+            if name != tool:
+                continue
+            rows = [i for i, _ in self.records_in(self.read_calls.get(mark))]
+            shown = [self.price_of(i) for i in rows]
+            if not rows or None in shown:
+                continue
+            mode = tuple(sorted(((k, v) for k, v in args.items() if isinstance(props.get(k), dict) and isinstance(props[k].get('enum'), list) and isinstance(v, (str, int, float)))))
+            labels = {str((self.rows.get(i) or {}).get(cat_key) or '').strip().lower() for i in rows} if cat_key else set()
+            for key, value in args.items():
+                if key not in props or isinstance(value, bool) or not isinstance(value, (int, float)):
+                    continue
+                pool = [p for label in labels for p in prices.get(label, [])]
+                if max(shown) > value:
+                    out[(key, mode)] = False
+                elif out.get((key, mode)) is not False and pool and (sum((p <= value for p in pool)) / len(pool)) ** len(rows) < CAP_CHANCE:
+                    out[(key, mode)] = True
+        return out
+
+    def list_below(self, cart: list[str]) -> None:
+        plan = self.cap_template()
+        cat_key = self.category_key()
+        if not plan or not cat_key:
+            return
+        tool, base, shelf, cap = plan
+        for line in cart:
+            price = self.price_of(line)
+            label = str((self.rows.get(line) or {}).get(cat_key) or '')
+            if price is None or price < 2 or not label or (line, price) in self.capped:
+                continue
+            self.capped.add((line, price))
+            limit = int(price) - 1 if float(price).is_integer() else int(price)
+            tried: set[int] = set()
+            for _ in range(WALK_CALLS):
+                if self.left() <= self.tail() + (WALK_ROOM if tried else 7) or self.finished or self.rushed():
+                    return
+                if limit < 1 or limit in tried:
+                    break
+                tried.add(limit)
+                faults: list[str] = []
+                args = _shape({**base, shelf: label, cap: limit}, self.schemas.get(tool), 'args', faults)
+                if faults:
+                    return
+                reply = self.act(tool, args)
+                if reply is None:
+                    return
+                seen = reply.get('observation')
+                self.observe(tool, seen)
+                rows = self.records_in(seen)
+                self.trace.append({'kind': 'list_below', 'line': line, 'price': price, 'limit': limit, 'rows': len(rows)})
+                page = self.paging(tool, seen)
+                if not rows or any(((self.price_of(i) or 0) > limit for i, _ in rows)) or not page or page[0] <= page[1] or self.price_sorted(seen):
+                    break
+                if page[0] <= 2 * page[1]:
+                    call = _shape({**args, page[2]: page[3]}, self.schemas.get(tool), 'args', faults) if page[3] is not None else None
+                    more = None if faults or call is None or self.left() <= self.tail() + 7 or self.rushed() else self.act(tool, call)
+                    if more is not None:
+                        self.observe(tool, more.get('observation'))
+                    break
+                low = min((p for i, _ in rows for p in [self.price_of(i)] if p is not None), default=None)
+                if low is None:
+                    break
+                limit = int(low) - 1 if float(low).is_integer() else int(low)
+
     def cheaper_rows(self) -> list[str]:
         if self.brief.get('pick') != 'cheapest':
             return []
@@ -1653,7 +1936,9 @@ class Kyo:
             return []
         self.cheaper_marks.add(mark)
         cart = self.cart_ids()
+        self.list_below(cart)
         picks: list[str] = []
+        room = self.compare_room() if self.compare_facts() is True else 0
         for line in cart:
             price = self.price_of(line)
             kind = str((self.rows.get(line) or {}).get(cat_key) or '').strip().lower()
@@ -1661,8 +1946,301 @@ class Kyo:
                 continue
             pool = [i for i in self.seen_order if i not in cart and i not in self.full and self.buyable(i) and (str((self.rows.get(i) or {}).get(cat_key) or '').strip().lower() == kind) and ((self.price_of(i) if self.price_of(i) is not None else float('inf')) < price)]
             pool.sort(key=lambda i: self.price_of(i) or 0.0)
-            picks += [i for i in pool[:2] if i not in picks]
-        return self.fill_facts(picks[:CHEAPER_OPENS], self.tail() + 4)
+            lowest = [i for i in pool if i in self.value_rows][:1]
+            pool = lowest + [i for i in pool if i not in lowest]
+            picks += [i for i in pool[:room or 2] if i not in picks]
+        return self.fill_facts(picks[:room * len(cart) if room else min(6, CHEAPER_OPENS * max(1, len(cart)))], self.tail() + 6)
+
+    @_soft('')
+    def below_cart(self) -> str:
+        """The buyable rows priced below a cart line, of its label, that nobody has read yet."""
+        cat_key = self.category_key()
+        cart = self.cart_ids()
+        lines = []
+        for line in cart:
+            price = self.price_of(line)
+            kind = str((self.rows.get(line) or {}).get(cat_key) or '').strip().lower() if cat_key else ''
+            if price is None or not kind:
+                continue
+            pool = [i for i in self.seen_order if i not in cart and i not in self.full and self.buyable(i) and str((self.rows.get(i) or {}).get(cat_key) or '').strip().lower() == kind and (self.price_of(i) if self.price_of(i) is not None else float('inf')) < price]
+            pool.sort(key=lambda i: self.price_of(i) or 0.0)
+            lines += [f'{i} at {self.price_of(i):g}' for i in pool[:CHEAPER_SHOWN]]
+        return 'Still unread and below a cart line: ' + ', '.join(lines) + '.' if lines else ''
+
+    def title_key(self) -> str | None:
+        """The row key holding a listing's name: of the short texts most rows carry and few rows share, with more than one word
+        on average and about as many different values as any such key has (a seller's name repeats where a listing's does not),
+        the shortest."""
+        cat_key = self.category_key()
+        totals: dict[str, list[Any]] = {}
+        for row in self.rows.values():
+            for key, value in row.items():
+                if key != cat_key and isinstance(value, str) and len(value) <= TITLE_CHARS:
+                    slot = totals.setdefault(key, [0, 0, 0, set()])
+                    slot[0] += len(value.split())
+                    slot[1] += 1
+                    slot[2] += len(value)
+                    slot[3].add(value)
+        kept = [(slot[2] / slot[1], key, len(slot[3])) for key, slot in totals.items() if slot[1] * 5 >= len(self.rows) * 4 and slot[0] >= slot[1] * 2 and len(slot[3]) * 2 >= slot[1]]
+        most = max((distinct for _, _, distinct in kept), default=0)
+        ranked = [(mean, key) for mean, key, distinct in kept if distinct * 10 >= most * 9]
+        return min(ranked)[1] if ranked else None
+
+    def hunt_words(self, number: int) -> tuple[str, list[str]]:
+        """The item's noun, a word its store label holds that no other item's label holds (a search reads labels too, so it
+        keeps the rows to this item), with the words a further search can add, most promising first: a word on most rows finds
+        nothing new and a word on one row finds little else, so the words kept sit between."""
+        cat_key = self.category_key()
+        item = self.items[number - 1]
+        title = self.title_key()
+        labels = [str(row.get(cat_key) or '') for row in self.rows.values() if self.owns(item, str(row.get(cat_key) or ''))] if cat_key else []
+        names = [str(row.get(title) or '') for row in self.rows.values() if title and cat_key and self.owns(item, str(row.get(cat_key) or ''))]
+        for record in self.full.values():
+            if cat_key and self.owns(item, str(record.get(cat_key) or '')):
+                names.append(' '.join((str(v) for v in (_fact_block(record) or {}).values() if isinstance(v, str) and len(v) <= HUNT_VALUE_CHARS)))
+        others = {w for n, other in enumerate(self.items, 1) if n != number for w in re.findall('[a-z]{4,}', ((other.shelf or '') + ' ' + other.name).lower())}
+        label = max(labels, key=labels.count).lower() if labels else (item.shelf or item.name).lower()
+        nouns = [w for w in re.findall('[a-z]{4,}', label) if w not in others]
+        noun = '' if number in self.hunt_no_noun else (max(nouns, key=len) if nouns else '')
+        if not names:
+            return (noun, [])
+        counts: dict[str, int] = {}
+        for name in names:
+            for word in {w.lower() for w in re.findall("[A-Za-z][A-Za-z'-]{2,}", name)}:
+                counts[word] = counts.get(word, 0) + 1
+        own = _roots(item.shelf or '') | _roots(item.name)
+        ceiling = max(2, int(len(names) * HUNT_COMMON))
+        words = [w for w, n in counts.items() if 2 <= n <= ceiling and w != noun and _roots(w) and not _roots(w) & own]
+        words.sort(key=lambda w: (-counts[w], w))
+        return (noun, words)
+
+    def rows_of_item(self, number: int) -> int:
+        cat_key = self.category_key()
+        item = self.items[number - 1]
+        return sum((1 for row in self.rows.values() if not cat_key or self.owns(item, str(row.get(cat_key) or ''))))
+
+    @_soft('')
+    def hunt_cheaper(self) -> str:
+        """Search on, without the model, while the pick is the cheapest and the store shows only part of what it holds.
+
+        Searches stop at a page cap while reporting the whole total (race 14: 96 rows of 199; race 15: 49 rows of up to 1000, no
+        price order, no price filter), so the lowest price of a kind can sit where no first search reaches. Race 15's search reads
+        titles, categories, brands, sellers and attribute VALUES and wants every word (22642 of 91849 matched words were found in
+        an attribute value only), so all of an item's required values together list nearly its whole fitting set, and adding a
+        further word splits a set too long for the cap. After a requirement was dropped the fitting set widens: that decided 7
+        tasks of race 15, nearly every agent buying a dearer listing, and a rare passing run had kept trying new words (9 cents
+        after 98 and 20). Each search is one step and no model call; cheaper_rows then opens the lowest rows."""
+        mark = _dump([self.needs_now(), self.budget, sorted(self.gone)])
+        if self.brief.get('pick') != 'cheapest' or self.hunts >= HUNT_ROUNDS or self.hunt_mark == mark:
+            return ''
+        plan = self.value_template()
+        if not plan or not self.price_key or self.clock() > HUNT_BY:
+            return ''
+        tool, base, field = plan
+        room = min(HUNT_STEPS, self.left() - self.tail() - HUNT_KEEP - 2 * len(self.items))
+        if room < 3:
+            return ''
+        self.hunts += 1
+        self.hunt_mark = mark
+        cart = self.cart_ids()
+        numbers = list(range(1, len(self.items) + 1))
+        share = max(3, room // max(1, len(numbers)))
+        spent = 0
+        fresh_total = 0
+        for number in numbers:
+            if spent >= room or self.finished:
+                break
+            used, gained = self.hunt_item(number, tool, base, field, min(share, room - spent))
+            spent += used
+            fresh_total += gained
+        self.trace.append({'kind': 'hunt', 'steps': spent, 'new_rows': fresh_total, 'cart': cart})
+        if spent:
+            self.wider_held = True
+        return f'Kyo ran {spent} more searches for the lowest price, one step each, and they showed {fresh_total} more rows.' if spent else ''
+
+    def hunt_item(self, number: int, tool: str, base: dict[str, Any], field: str, room: int) -> tuple[int, int]:
+        """Up to `room` searches for one item: all its required values together, then split by further words."""
+        tried = self.hunt_tried.setdefault(number, set())
+        noun, _ = self.hunt_words(number)
+        values = [value for value, _ in self.value_words(number)]
+        spent = gained = idle = 0
+        issued = refused = False
+
+        def run(query: str) -> bool:
+            """Search `query` to its last page or the room, reading again no page this episode has read; whether it found any row."""
+            nonlocal spent, gained, idle, issued, refused
+            tried.add(query.lower())
+            faults: list[str] = []
+            args = _shape({**base, field: query}, self.schemas.get(tool), 'args', faults)
+            refused = refused or bool(faults)
+            if faults or spent >= room or self.finished:
+                return False
+            issued = True
+            holds_values = bool(values) and all((v.lower() in query.lower() for v in values))
+            found = False
+            walked: set[str] = set()
+            while not self.finished and self.clock() <= HUNT_BY + HUNT_GRACE:
+                mark = self.call_mark(tool, args)
+                if mark in walked:
+                    return found
+                walked.add(mark)
+                if mark in self.read_calls:
+                    seen = self.read_calls[mark]
+                    new = HUNT_PAGE_NEW
+                elif spent >= room:
+                    return found
+                else:
+                    before = self.rows_of_item(number)
+                    reply = self.act(tool, args)
+                    spent += 1
+                    if reply is None:
+                        return found
+                    seen = reply.get('observation')
+                    self.observe(tool, seen)
+                    new = self.rows_of_item(number) - before
+                    gained += new
+                    idle = 0 if new else idle + 1
+                rows = self.records_in(seen)
+                found = found or bool(rows)
+                if holds_values:
+                    self.value_rows.update((i for i, _ in rows))
+                page = self.paging(tool, seen)
+                if not page or page[3] is None or (new < HUNT_PAGE_NEW and page[0] > HUNT_WHOLE):
+                    return found
+                faults = []
+                args = _shape({**args, page[2]: page[3]}, self.schemas.get(tool), 'args', faults)
+                if faults:
+                    return found
+            return found
+        mark = (number, tuple(values))
+        stem = self.hunt_stem.get(mark)
+        if stem is None:
+            tries = ([' '.join((values + [noun])).strip(), ' '.join(values)] if values else []) + ([' '.join((values[:-1] + [noun])).strip()] if len(values) >= 2 else []) + ([noun] if noun else [])
+            stem = ''
+            for query in dict.fromkeys(tries):
+                issued = False
+                if run(query):
+                    stem = query
+                    break
+                if not issued:
+                    return (spent, gained)
+                if query == noun:
+                    self.hunt_no_noun.add(number)
+                    noun = ''
+            self.hunt_stem[mark] = stem
+        while spent < room and idle < HUNT_IDLE and not refused and not self.finished and self.clock() <= HUNT_BY + HUNT_GRACE:
+            _, words = self.hunt_words(number)
+            words = [w for w in words if f'{w} {stem}'.strip().lower() not in tried and w not in stem.lower().split()]
+            if not words:
+                break
+            run(f'{words[0]} {stem}'.strip())
+        return (spent, gained)
+
+    @_soft(list)
+    def hunt_fits(self) -> list[str]:
+        """Search on, without the model, before ending without a purchase.
+
+        Race 15: 495 of 2340 episodes of 13 leaders ended without a purchase on a task that has a right answer, and on 433 of them
+        another agent held a cart the store's answer set accepted, so a fit existed within reach; the same holds in practice worlds
+        (a fit past the page cap, "no in-stock jeans list a slim fit"). A requirement's value and its words find listings the
+        first searches did not show; the rows naming them are opened so that the audit judges their attributes. Returns what
+        was read."""
+        if self.fit_hunted or self.clock() > HUNT_BY:
+            return []
+        plan = self.value_template()
+        if not plan:
+            return []
+        tool, base, field = plan
+        keep = self.tail() + len(self.items) + 1
+        spare = self.left() - keep
+        if spare < 3:
+            return []
+        self.fit_hunted = True
+        cat_key = self.category_key()
+        held = [str((self.rows.get(i) or {}).get(cat_key) or '') for i in self.cart_ids() if (self.held_units(i) or 0) > 0] if cat_key else []
+        numbers = [n for n, item in enumerate(self.items, 1) if not any((self.owns(item, label) for label in held))] or list(range(1, len(self.items) + 1))
+        wanted = {number: {w for value, _ in self.value_words(number) for w in _value_tokens(value)} for number in numbers}
+        paged = self.unread_pages(tool, wanted, min(FIT_PAGES, spare // 2))
+        room = min(HUNT_STEPS, self.left() - self.tail() - HUNT_KEEP)
+        spent = 0
+        for number in numbers if room >= 3 else []:
+            item = self.items[number - 1]
+            pairs = self.value_words(number)
+            noun, words = self.hunt_words(number)
+            tries = [f'{family} {value} {noun}'.strip() for family in self.series_for(number) for value in ([v for v, _ in pairs][:1] or [''])]
+            tries += [f'{value} {noun}'.strip() for value, _ in pairs] + [value for value, _ in pairs if noun] + [f'{word} {noun}'.strip() for word in words[:HUNT_FIT_WORDS]] + ([noun] if noun else [])
+            share = max(2, room // max(1, len(numbers)))
+            used = 0
+            for query in dict.fromkeys(tries):
+                if spent >= room or used >= share or self.finished or self.clock() > HUNT_BY + HUNT_GRACE:
+                    break
+                faults: list[str] = []
+                args = _shape({**base, field: query}, self.schemas.get(tool), 'args', faults)
+                if faults:
+                    continue
+                reply = self.act(tool, args)
+                spent += 1
+                used += 1
+                if reply is None:
+                    return []
+                self.observe(tool, reply.get('observation'))
+        picks: list[str] = []
+        for number in numbers:
+            item = self.items[number - 1]
+            pool = [i for i in self.seen_order if i not in self.full and self.buyable(i) and (not cat_key or self.owns(item, str((self.rows.get(i) or {}).get(cat_key) or '')))]
+            cap = self.budget if isinstance(self.budget, (int, float)) else None
+            pool = [i for i in pool if cap is None or (self.price_of(i) or 0) <= cap]
+            words = wanted.get(number) or set()
+            pool.sort(key=lambda i: (-len(words & _text_words(_dump(self.rows.get(i) or {}))), self.price_of(i) if self.price_of(i) is not None else float('inf')))
+            picks += pool[:HUNT_FIT_OPENS]
+        read: list[str] = []
+        for start in range(0, len(picks), HUNT_FIT_OPENS):
+            if self.clock() > HUNT_BY + HUNT_GRACE:
+                break
+            read += self.fill_facts(picks[start:start + HUNT_FIT_OPENS], keep)
+        self.trace.append({'kind': 'hunt_fits', 'pages': paged, 'searches': spent, 'opened': len(read)})
+        return read
+
+    def unread_pages(self, tool: str, wanted: dict[int, set[str]], room: int) -> int:
+        """Up to `room` further pages of the earliest searches that hold a required value, each item its share first, before any
+        new words; the steps it took. A search whose rows all belong to another item is left. In a practice world accepted rows
+        sat on unread pages of the episode's own searches in nearly every wrong decline, and in races 13-15 about 23% of passing
+        carts were first seen on page 2 or later."""
+        spent = 0
+        cat_key = self.category_key()
+        share = max(1, room // max(1, len(wanted)))
+        for limit in (share, room):
+            for number, words in wanted.items():
+                stop = min(room, spent + limit)
+                for mark, (name, args) in list(self.read_args.items()):
+                    text = ' '.join((v for v in args.values() if isinstance(v, str))).lower()
+                    if name != tool or not words & _text_words(text):
+                        continue
+                    seen = self.read_calls[mark]
+                    owners = {self.owner_of(str(record.get(cat_key) or '')) for _, record in self.records_in(seen)} if cat_key else set()
+                    if owners and 0 not in owners and number not in owners:
+                        continue
+                    call, walked = args, {mark}
+                    while spent < stop and not self.finished:
+                        page = self.paging(tool, seen)
+                        if not page or page[3] is None:
+                            break
+                        faults: list[str] = []
+                        call = _shape({**call, page[2]: page[3]}, self.schemas.get(tool), 'args', faults)
+                        now = self.call_mark(tool, call) if not faults else ''
+                        if faults or now in walked:
+                            break
+                        walked.add(now)
+                        if now in self.read_calls:
+                            seen = self.read_calls[now]
+                            continue
+                        reply = self.act(tool, call)
+                        spent += 1
+                        if reply is None:
+                            return spent
+                        seen = reply.get('observation')
+                        self.observe(tool, seen)
+        return spent
 
     def call_mark(self, name: str, args: dict[str, Any]) -> str:
         """One spelling per call: words in any case and spacing, a number at its first value left out."""
@@ -1692,6 +2270,168 @@ class Kyo:
         fresh = mark not in seen
         seen.add(mark)
         return fresh
+
+    @_soft('')
+    def last_page_first(self, name: str, args: dict[str, Any], observation: Any) -> str:
+        """A new search that opened on a later page shows few rows and no next page, which reads as all there is: race 15's models
+        asked the browse tool for its highest page in 1716 of 2845 calls, seeing 7 of 342 rows and "next: none". When such a call
+        reports more rows than it shows, the same call at the lowest value of its numeric argument tells: rows with other ids,
+        at least as many, mean that argument is the page."""
+        if name in self.page_args or not isinstance(observation, dict):
+            return ''
+        props = (self.schemas.get(name) or {}).get('properties') or {}
+        numeric = [k for k, v in args.items() if isinstance(v, int) and not isinstance(v, bool) and k in props and v > (props[k].get('minimum') if isinstance(props[k].get('minimum'), int) else 1)]
+        if len(numeric) != 1 or self.left() <= self.tail() + 4:
+            return ''
+        shape = self.read_shape(name, observation)
+        if not shape or not shape.get('count') or shape.get('next') is None or observation.get(shape['next']) is not None:
+            return ''
+        rows = observation.get(shape['rows'])
+        count = observation.get(shape['count'])
+        if not isinstance(rows, list) or not isinstance(count, int) or count <= len(rows):
+            return ''
+        key = numeric[0]
+        low = props[key].get('minimum') if isinstance(props[key].get('minimum'), int) else 1
+        faults: list[str] = []
+        call = _shape({**args, key: low}, self.schemas.get(name), 'args', faults)
+        if faults:
+            return ''
+        reply = self.act(name, call)
+        if reply is None:
+            return ''
+        seen = reply.get('observation')
+        self.observe(name, seen)
+        new = seen.get(shape['rows']) if isinstance(seen, dict) else None
+        if not isinstance(new, list) or len(new) < len(rows) or {i for i, _ in self.records_in(seen)} & {i for i, _ in self.records_in(observation)}:
+            return ''
+        self.page_args[name] = key
+        self.trace.append({'kind': 'page_arg', 'tool': name, 'arg': key})
+        return f'\n[Kyo] {key} is the page number of this search: the call above showed its last page. Page {low} of the same search:\n' + self.show(seen)
+
+    @_soft(False)
+    def names_code(self, args: dict[str, Any]) -> bool:
+        """Whether a search names a model or part code some listing's text gave as a code."""
+        said = {c for v in args.values() if isinstance(v, str) for c in _codes(v)}
+        if not said:
+            return False
+        known: set[str] = set()
+        for mark in self.fit_index()['marks'].values():
+            known.update(mark.get('codes') or [])
+            known.update(mark.get('works') or [])
+        return bool(said & known)
+
+    def first_look(self, name: str, args: dict[str, Any], fresh: bool) -> dict[str, Any]:
+        """A new search starts on its first page once the tool's page argument is known."""
+        key = self.page_args.get(name)
+        if not key or not fresh or not isinstance(args.get(key), int):
+            return args
+        props = (self.schemas.get(name) or {}).get('properties') or {}
+        low = props.get(key, {}).get('minimum') if isinstance(props.get(key, {}).get('minimum'), int) else 1
+        return {**args, key: low}
+
+    @_soft('')
+    def shorter_search(self, name: str, args: dict[str, Any], observation: Any) -> str:
+        """A long words search that found nothing is run again with its first words, no model turn needed. Race 15: 54% of
+        six-word queries and 42% of five-word ones came back empty (search wants every word), 10% of one-word ones."""
+        plan = self.value_template()
+        if not plan or plan[0] != name or self.left() <= self.tail() + SHORT_KEEP or self.finished or not isinstance(observation, dict):
+            return ''
+        field = plan[2]
+        text = args.get(field)
+        if not isinstance(text, str) or self.records_in(observation) or len(text.split()) < 3:
+            return ''
+        for value in observation.values():
+            if (isinstance(value, (list, str)) and value) or (isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0):
+                return ''
+        short = ' '.join([w for w in text.split() if not _codes(w)][:2])
+        if not short:
+            return ''
+        faults: list[str] = []
+        call = _shape({k: v for k, v in {**args, field: short}.items() if isinstance(v, bool) or not isinstance(v, int)}, self.schemas.get(name), 'args', faults)
+        if faults:
+            return ''
+        reply = self.act(name, call)
+        if reply is None:
+            return ''
+        seen = reply.get('observation')
+        self.observe(name, seen)
+        self.trace.append({'kind': 'shorter', 'from': text, 'to': short, 'rows': len(self.records_in(seen))})
+        return f'\n[Kyo] Nothing has all those words; the same search with {short!r} shows:\n' + self.show(seen)
+
+    @_soft('')
+    def first_moves(self) -> str:
+        """Search each item once and read a few of its listings before the model's first turn, so the interview can start at once.
+
+        A race model turn costs 5-10 s (race 15: 207 s mean per task, 16 of 180 and 30 of 180 episodes of two agents killed at 300 s,
+        all on 3+ items) and the first turns only do this; one-item tasks have time, and keep the model's own first searches. Each
+        item's search is its required values with its noun, then its name when that finds nothing. Returns what the store showed; '' when the search tool cannot be used without a model's reading of its
+        modes, and the model then starts as usual."""
+        plan = self.value_template()
+        if not plan or self.max_steps < OPEN_MIN_STEPS or len(self.items) < OPEN_ITEMS:
+            return ''
+        tool, base, field = plan
+        self.env_gap = OPEN_GAP
+        shown: list[str] = []
+        stop_at = self.step + self.left() - self.tail() - self.msgs_free() - OPEN_LATER * len(self.items) - HUNT_KEEP // 2
+        for number, item in enumerate(self.items, 1):
+            wanted = [m.split(':', 1)[1].strip() for m in item.musts if ':' in m and m not in [need for _, need in self.refs]]
+            wanted = [w for w in wanted if w and len(w.split()) <= 3 and not re.search(OPEN_NOT, w, re.I)]
+            noun = item.name if len(item.name.split()) <= 3 else ' '.join(item.name.split()[-2:])
+            tries = list(dict.fromkeys(([' '.join(wanted[:2] + [noun])] if wanted else []) + [noun]))
+            for query in tries:
+                faults: list[str] = []
+                args = _shape({**base, field: query}, self.schemas.get(tool), 'args', faults)
+                if faults or self.finished or self.step >= stop_at:
+                    break
+                reply = self.act(tool, args)
+                if reply is None:
+                    return '\n'.join(shown)
+                seen = reply.get('observation')
+                self.observe(tool, seen)
+                if self.records_in(seen):
+                    self.searched = (self.searched + [dict(args)])[-8:]
+                    shown.append(f'{query}: ' + self.show(seen))
+                    shown += self.more_rows_for_keys(tool, args, seen, stop_at, number)
+                    if self.rows_of_item(number) >= OPEN_EACH:
+                        break
+                else:
+                    shown.append(f"{query}: {'the store refused the call: ' + self.show(seen) if _failed(seen) else 'no rows'}")
+        if self.rows and self.roles.get('ask') and self.msgs_free() > 0:
+            start = self.step
+            found = [n for n in range(1, len(self.items) + 1) if self.rows_of_item(n)]
+            while self.step - start < self.max_steps // OPEN_SHARE and self.step < stop_at and not self.finished:
+                if min((self.records_of_item(n) for n in found), default=OPEN_EACH) >= OPEN_EACH:
+                    break
+                had = len(self.full)
+                self.widen()
+                if len(self.full) == had:
+                    break
+        self.env_gap = ENV_GAP
+        self.trace.append({'kind': 'first_moves', 'rows': len(self.rows), 'opened': len(self.full)})
+        shown += ['read in full: ' + self.page_text(ident, record) for ident, record in self.full.items()]
+        proof = self.evidence(list(self.full.values()))
+        return '\n'.join(shown + ([proof] if proof else []))
+
+    def page_text(self, ident: str, record: dict[str, Any]) -> str:
+        """One read listing for the model: its attributes first, since those are what it judges."""
+        block = _fact_block(record) or {}
+        rest = {k: v for k, v in record.items() if v is not block and not isinstance(v, (dict, list))}
+        return f'{ident}: attributes ' + _dump(_clip(block, 120))[:PAGE_ATTR_CHARS] + ' | ' + _dump(_clip(rest, 200))[:PAGE_REST_CHARS]
+
+    def more_rows_for_keys(self, tool: str, args: dict[str, Any], seen: Any, stop_at: int, number: int) -> list[str]:
+        """One further page when a first page shows too few of the item's listings to tell what they carry; what it showed."""
+        page = self.paging(tool, seen)
+        if not page or page[3] is None or self.rows_of_item(number) >= OPEN_EACH or self.finished or self.step >= stop_at:
+            return []
+        faults: list[str] = []
+        call = _shape({**args, page[2]: page[3]}, self.schemas.get(tool), 'args', faults)
+        if faults:
+            return []
+        reply = self.act(tool, call)
+        if reply is None:
+            return []
+        self.observe(tool, reply.get('observation'))
+        return [f'next page: ' + self.show(reply.get('observation'))]
 
     def observe(self, name: str, observation: Any) -> str:
         self.absorb(observation)
@@ -1867,7 +2607,7 @@ class Kyo:
         schema = self.schemas.get(tool or '') or {}
         props = schema.get('properties') or {}
         texts = [k for k, v in props.items() if isinstance(v, dict) and 'string' in _kinds(v) and ('enum' not in v)]
-        named = [k for k in texts if re.search('(?:^|_)(?:q|query|search|text|phrase|keywords?|terms?|words?)(?:_|$)|query|phrase|keyword', k, re.I)]
+        named = [k for k in texts if re.search(QUERY_WORDS, _snake(k), re.I)]
         for args in reversed(self.searched):
             fields = [k for k in named or texts if isinstance(args.get(k), str) and re.search('[a-z]', args[k], re.I)]
             if not named:
@@ -1890,33 +2630,83 @@ class Kyo:
                 return (tool, keep, field)
         return None
 
-    def value_words(self, number: int) -> list[str]:
+    def value_words(self, number: int) -> list[tuple[str, bool]]:
+        """Search words for each requirement value of the item a words search can match, each with whether an answer
+        gave it: the value itself, or for an answer's lower numeric limit with a unit its number and
+        unit, since such a hidden limit often sits on the value of a listing that fits."""
         out = []
+        told = self.items[number - 1].told
         for n, need in self.needs_now():
             if n != number or need in [m for _, m in self.refs] or ':' not in need:
                 continue
             value = need.split(':', 1)[1].strip()
+            edge = re.search(FLOOR, value, re.I)
+            if edge:
+                if need in told:
+                    out.append((edge.group(1).strip(), True))
+                continue
             if not value or re.search('\\b(?:not|no|other than|unlike|alongside|listing|page|shown|at most|at least|under|over|below|above|less|more|between|within|up to|or)\\b', value, re.I):
                 continue
-            out.append(value)
+            out.append((value, need in told))
         return out
 
-    def value_search(self, numbers: list[int]) -> str:
+    def value_template(self) -> tuple[str, dict[str, Any], str] | None:
+        """The search a value search copies: search_template(), or, when every search so far listed a category without
+        words, the tool's one query field with its one mode argument set to read it (the option naming words or a query,
+        else the other option of a required two-option mode). None when the schema leaves a doubt."""
         plan = self.search_template()
-        if not plan or self.left() < 22:
+        tool = self.roles.get('search')
+        if plan or not tool:
+            return plan
+        schema = self.schemas.get(tool) or {}
+        props = schema.get('properties') or {}
+        required = schema.get('required') or []
+        told = self.brief.get('search_words') if isinstance(self.brief.get('search_words'), dict) else {}
+        said, fixed = (told.get('field') if isinstance(told.get('field'), str) else None, told.get('args') if isinstance(told.get('args'), dict) else {})
+        named_tool = told.get('tool') if isinstance(told.get('tool'), str) and told.get('tool') in self.schemas else tool
+        spec = (self.schemas.get(named_tool) or {}).get('properties') or {}
+        if said in spec and 'string' in _kinds(spec[said]) and 'enum' not in spec[said]:
+            faults: list[str] = []
+            base = _shape({**fixed, said: 'x'}, self.schemas.get(named_tool), 'args', faults)
+            if not faults:
+                base.pop(said, None)
+                return (named_tool, base, said)
+        named = [k for k, v in props.items() if isinstance(v, dict) and 'string' in _kinds(v) and 'enum' not in v and re.search(QUERY_WORDS, _snake(k), re.I)]
+        last = self.searched[-1] if self.searched else {}
+        enums = {k: v['enum'] for k, v in props.items() if isinstance(v, dict) and isinstance(v.get('enum'), list) and len(v['enum']) >= 2}
+        modes = []
+        for key, options in enums.items():
+            reads = [o for o in options if isinstance(o, str) and re.search(QUERY_WORDS, o, re.I)]
+            others = [o for o in options if o != last.get(key)]
+            if len(reads) == 1:
+                modes.append((key, reads[0]))
+            elif key in required and len(options) == 2 and len(others) == 1:
+                modes.append((key, others[0]))
+        if len(named) != 1 or len(modes) > 1 or (enums and not modes):
+            return None
+        base = {k: last[k] for k in required if k in last and k != named[0]}
+        base.update(modes)
+        return (tool, base, named[0])
+
+    def value_search(self, numbers: list[int]) -> str:
+        plan = self.value_template()
+        if not plan or self.left() < self.tail() + VALUE_ROOM:
             return ''
         tool, base, field = plan
         seen: list[str] = []
-        budget = 8
+        budget = min(8, self.left() - self.tail() - VALUE_KEEP)
         for number in numbers:
-            values = self.value_words(number)
+            pairs = self.value_words(number)
             item = self.items[number - 1]
-            fresh = [v for v in values if any((':' in t and t.split(':', 1)[1].strip() == v for t in item.told))]
+            values = [v for v, _ in pairs]
+            fresh = [v for v, told in pairs if told]
             if not fresh or budget <= 2:
                 continue
+            lead = [v for v in fresh if len(v.split()) == 1 or re.fullmatch(AMOUNT, v, re.I)]
+            values = lead + [v for v in values if v not in lead]
             stated = [i for i, v in enumerate(values) if v not in fresh]
             drop = stated[-1] if stated else 0
-            tries = [values, values[:drop] + values[drop + 1:]] if len(values) > 1 else [values]
+            tries = [values, values[:drop] + values[drop + 1:]] if len(values) > 1 else [[values[0], item.name], values] if lead else [values]
             for words in tries[:2]:
                 if not words:
                     continue
@@ -1937,9 +2727,12 @@ class Kyo:
                 if cap is not None and prices and all((p is not None and p > 10 * cap for p in prices)):
                     cap = None
                 rows = [i for i in found if self.buyable(i) and (not cat_key or self.owns(item, str((self.rows.get(i) or {}).get(cat_key) or ''))) and (cap is None or (self.price_of(i) or 0) <= cap)]
+                home = self.home_label(number)
+                if cat_key and home:
+                    rows.sort(key=lambda i: _words(str((self.rows.get(i) or {}).get(cat_key) or '')) != home)
                 seen.append(f'{_dump(args.get(field))}: ' + (', '.join(rows[:6]) or 'no row of that kind'))
                 if rows:
-                    opened = self.fill_facts([i for i in rows if i not in self.full][:min(3, budget)], self.tail() + 16)
+                    opened = self.fill_facts([i for i in rows if i not in self.full][:min(3, budget)], self.tail() + VALUE_KEEP)
                     budget -= len(opened)
                     if opened:
                         seen.append('opened: ' + ' | '.join(opened)[:2400])
@@ -1948,6 +2741,27 @@ class Kyo:
             return ''
         self.trace.append({'kind': 'value_search', 'seen': [s[:200] for s in seen]})
         return "[Kyo searched each such item's requirement values together and read the first fitting-kind rows] " + '\n'.join(seen)
+
+    def home_label(self, number: int) -> str:
+        """The category label (in _words form) of the item's own listings: the request's shelf name when a listing
+        seen carries it, else the label most of the item's opened listings (or, with none opened, its search rows)
+        carry; '' when none is known."""
+        cat_key = self.category_key()
+        if not cat_key:
+            return ''
+        item = self.items[number - 1]
+        for pool in (self.full, self.rows):
+            counts: dict[str, int] = {}
+            for record in pool.values():
+                label = str(record.get(cat_key) or '')
+                if label and self.owns(item, label):
+                    counts[_words(label)] = counts.get(_words(label), 0) + 1
+            for name in (item.shelf, item.name):
+                if _words(name) in counts:
+                    return _words(name)
+            if counts:
+                return max(counts, key=lambda label: counts[label])
+        return ''
 
     def next_ask(self, lanes: dict[int, list[str]], found: dict[int, int], spent: dict[int, int], used: dict[int, set[str]]) -> tuple[int, list[str]]:
         first = {n: i for i, n in enumerate(self.plan_order)}
@@ -1970,12 +2784,30 @@ class Kyo:
         if len(self.items) == 1 and (not rows):
             rows = [(label, key, carried, len(values)) for label, key, carried, values in table]
         rows.sort(key=lambda r: (-r[2], measured.get(r[1], False), -r[3]))
-        keys = [key for _, key, _, _ in rows if not any((_names(prop, _stem(key)) for prop in settled)) and (not re.search(NOT_PROPERTY, key))]
-        return [key for key in keys if not re.search(CATCH_ALL, key)] + [key for key in keys if re.search(CATCH_ALL, key)]
+        every = [key for _, key, _, _ in rows if not any((_names(prop, _stem(key)) for prop in settled))]
+        keys = [key for key in every if not re.search(NOT_PROPERTY, key) or re.search('\\w[ _]models?\\b', key)]
+        return [key for key in keys if not re.search(CATCH_ALL, key)] + [key for key in keys if re.search(CATCH_ALL, key)] + [key for key in every if key not in keys]
+
+    def adopt_labels(self) -> None:
+        cat_key = self.category_key()
+        if len(self.items) < 2 or not cat_key:
+            return
+        self.part_shelves()
+        labels = {str(record.get(cat_key) or '') for record in self.full.values()} - {''}
+        strays = [label for label in labels if not self.owner_of(label)]
+        orphans = [n for n in range(1, len(self.items) + 1) if not any((self.owner_of(label) == n and label not in self.adopted for label in labels))]
+        if strays and len(orphans) == 1:
+            self.adopted.update({label: orphans[0] for label in strays})
+            self.trace.append({'kind': 'adopted', 'item': orphans[0], 'labels': strays})
 
     def owner_of(self, label: str) -> int:
         if not label:
             return 0
+        if label in self.adopted:
+            return self.adopted[label]
+        known = self.owners_seen.get((label, len(self.items)))
+        if known is not None:
+            return known
         words = _words(label)
         long = _roots(label)
         best, top = (0, 0.0)
@@ -1989,10 +2821,11 @@ class Kyo:
                 score = len(long & mine) / max(1, len(long | mine))
             if score > top:
                 best, top = (number, score)
+        self.owners_seen[(label, len(self.items))] = best
         return best
 
     def owns(self, item: Item, label: str) -> bool:
-        return bool(label) and item in self.items and (self.owner_of(label) == self.items.index(item) + 1)
+        return bool(label) and item in self.items and (self.owner_of(label) == self.items.index(item) + 1 or _words(label) == _words(item.shelf or ''))
 
     def records_of_item(self, number: int) -> int:
         cat_key = self.category_key()
@@ -2000,6 +2833,7 @@ class Kyo:
         return sum((1 for record in self.full.values() if cat_key and self.owns(item, str(record.get(cat_key) or '')) and _fact_block(record)))
 
     def plan_lanes(self, count: int) -> dict[int, list[str]]:
+        self.adopt_labels()
         table = self.key_table()
         settled = []
         for number, item in enumerate(self.items, 1):
@@ -2382,6 +3216,9 @@ class Kyo:
         return '\n'.join(lines)
 
     def fit_index(self) -> dict[str, Any]:
+        state = (len(self.seen_order), len(self.full), sum((len(v) for v in self.views.values())))
+        if self.fit_cached and self.fit_cached[0] == state:
+            return self.fit_cached[1]
         marks: dict[str, dict[str, Any]] = {}
         notes: dict[str, set[str]] = {}
         for ident in self.seen_order:
@@ -2391,7 +3228,8 @@ class Kyo:
             marks[ident] = _fit_marks(text)
             for part, codes in marks[ident]['also']:
                 notes.setdefault(part, set()).update(codes)
-        return {'marks': marks, 'notes': notes}
+        self.fit_cached = (state, {'marks': marks, 'notes': notes})
+        return self.fit_cached[1]
 
     def fit_set(self, ident: str, index: dict[str, Any]) -> set[str]:
         mark = index['marks'].get(ident) or {}
@@ -2405,6 +3243,63 @@ class Kyo:
         item = self.items[number - 1]
         return [i for i in self.seen_order if cat_key and self.owns(item, str((self.rows.get(i) or {}).get(cat_key) or ''))]
 
+    def link_system(self, part: int, main: int, index: dict[str, Any]) -> tuple[int, int, set[str]] | None:
+        """(item carrying series codes, item naming them, the series) of two items bound to each other, or None when the rows read so far
+        show no such system: most rows of one item carry a code of few series, and rows of the other name at least one of those series."""
+        marks = index['marks']
+        for carrier, namer in ((part, main), (main, part)):
+            rows = self.item_ids(carrier)
+            tagged = [i for i in rows if (marks.get(i) or {}).get('fam')]
+            families = {f for i in tagged for f in marks[i]['fam']}
+            if len(tagged) < LINK_ROWS or 2 * len(tagged) < len(rows) or len(families) > LINK_FAMILIES:
+                continue
+            if any((f in families for i in self.item_ids(namer) for f in (marks.get(i) or {}).get('named') or [])):
+                return (carrier, namer, families)
+        return None
+
+    def link_holds(self, carried: str, namer: str, families: set[str], index: dict[str, Any]) -> bool | None:
+        """Whether a row's own series is one the other row names; None when either row says nothing about it."""
+        own = set((index['marks'].get(carried) or {}).get('fam') or []) & families
+        named = set((index['marks'].get(namer) or {}).get('named') or []) & families
+        return bool(own & named) if own and named else None
+
+    def link_faults(self, part: int, main: int, device: str, lines: list[str], index: dict[str, Any]) -> list[str]:
+        system = self.link_system(part, main, index)
+        if not system:
+            return []
+        carrier, _, families = system
+        marks = index['marks']
+        faults = []
+        for line in lines:
+            carried, namer = (line, device) if carrier == part else (device, line)
+            if self.link_holds(carried, namer, families, index) is not False:
+                continue
+            wanted = set(marks[namer].get('named') or []) & families
+            good = [i for i in self.item_ids(carrier) if set(marks[i].get('fam') or []) & wanted and not self.sold_out(i) and i != carried][:4]
+            faults.append(f"{carried} is of series {', '.join(sorted(set(marks[carried].get('fam') or []) & families))}, while {namer} takes {', '.join(sorted(wanted))}" + (f"; seen listings of that series: {', '.join(good)}" if good else f"; search that series with the item's words, or take another {self.items[main - 1].name} whose series the wanted lines carry"))
+        return faults
+
+    def series_for(self, number: int) -> list[str]:
+        """The series to search a linked item by, most useful first: those the cart's lines of the linked items hold, then those most rows of the
+        linked items carry or name. [] when the item is linked by no series system."""
+        index = self.fit_index()
+        marks = index['marks']
+        counts: dict[str, int] = {}
+        held: list[str] = []
+        cart = self.cart_ids()
+        for part, main in self.bound:
+            system = self.link_system(part, main, index) if number in (part, main) else None
+            if not system:
+                continue
+            for member in (part, main):
+                for i in self.item_ids(member):
+                    tags = set((marks.get(i) or {}).get('fam') or []) | set((marks.get(i) or {}).get('named') or [])
+                    for family in tags & system[2]:
+                        counts[family] = counts.get(family, 0) + 1
+                        if i in cart and family not in held:
+                            held.append(family)
+        return (held + [f for f in sorted(counts, key=lambda f: (-counts[f], f)) if f not in held])[:LINK_SEARCHES]
+
     def fit_faults(self) -> list[str]:
         if not self.bound:
             return []
@@ -2416,13 +3311,19 @@ class Kyo:
             parts = [i for i in cart if i in self.item_ids(part)]
             if len(devices) != 1 or not parts:
                 continue
+            linked = self.link_faults(part, main, devices[0], parts, index)
+            if linked:
+                faults += linked
+                continue
             codes = set(index['marks'].get(devices[0], {}).get('codes') or [])
             if not codes:
                 continue
+            barred = lambda i: set(index['marks'].get(i, {}).get('bars') or [])
+            covers = lambda i: any((_code_hit(p, c) for p in self.fit_set(i, index) for c in codes)) and not any((_code_hit(p, c) for p in barred(i) for c in codes))
             for line in parts:
                 fits = self.fit_set(line, index)
-                if fits and (not fits & codes):
-                    good = [i for i in self.item_ids(part) if self.fit_set(i, index) & codes and (not self.sold_out(i)) and (i not in cart)][:4]
+                if fits and (not covers(line)):
+                    good = [i for i in self.item_ids(part) if covers(i) and (not self.sold_out(i)) and (i not in cart)][:4]
                     faults.append(f"{line} ({self.items[part - 1].name}) works with {', '.join(sorted(fits)[:4])}, not with {devices[0]} ({', '.join(sorted(codes))})" + (f"; seen parts of that kind that work with it: {', '.join(good)}" if good else '; no seen part of that kind works with it, so look for one or switch the device: ' + self.fit_plan(short=True)))
         return faults
 
@@ -2441,16 +3342,93 @@ class Kyo:
                     for code in self.fit_set(i, index):
                         tally.setdefault(code, {}).setdefault(p, 0)
                         tally[code][p] += 1
-            ranked = sorted(tally.items(), key=lambda kv: (-len(kv[1]), -sum(kv[1].values())))[:4]
-            devices = {code: [i for i in self.item_ids(main) if code in (index['marks'].get(i, {}).get('codes') or [])][:2] for code, _ in ranked}
+            for p in parts:
+                system = self.link_system(p, main, index)
+                for i in self.item_ids(p) if system and system[0] == p else []:
+                    for code in set((index['marks'].get(i) or {}).get('fam') or []) & system[2] if not self.sold_out(i) else ():
+                        tally.setdefault(code, {}).setdefault(p, 0)
+                        tally[code][p] += 1
+            ranked = sorted(tally.items(), key=lambda kv: (-len(kv[1]), -sum(kv[1].values())))[:6]
+            devices = {code: [i for i in self.item_ids(main) if code in ((index['marks'].get(i) or {}).get('named') or []) or any((_code_hit(code, c) for c in index['marks'].get(i, {}).get('codes') or []))][:2] for code, _ in ranked}
             text = '; '.join((f'{code}: ' + ', '.join((f'{n} {self.items[p - 1].name}' for p, n in sorted(per.items()))) + (f" (device seen: {', '.join(devices[code])})" if devices[code] else ' (device not seen yet)') for code, per in ranked))
             if text:
                 lines.append(f"codes the {self.items[main - 1].name} candidates' parts name -> {text}")
+            sets = self.cheapest_sets(main, parts, index) if self.brief.get('pick') == 'cheapest' else ''
+            if sets:
+                lines.append(sets)
         if not lines:
             return ''
-        return ' | '.join(lines) if short else "[fit plan: a device fits a part when the part's text names the device's model code or another name it is sold as; codes are not searchable, so list the device's category and read the codes on its rows] " + ' | '.join(lines)
+        return ' | '.join(lines) if short else "[fit plan: a device fits a part when the part's text names the device's model code or another name it is sold as, or when the device's text names the series of the part's code; try one search of a code or series with the item's words, and if it finds nothing list the device's category and read the codes on its rows] " + ' | '.join(lines)
+
+    @_soft('')
+    def cheapest_sets(self, main: int, parts: list[int], index: dict[str, Any]) -> str:
+        """The lowest totals of one device of the item with one part of each bound item its codes fit, among buyable rows
+        seen, requirements not checked: the pick counts the whole order, not each line on its own."""
+        options = []
+        systems = {part: self.link_system(part, main, index) for part in parts}
+        shelves = {part: sorted(((self.price_of(i), i, self.fit_set(i, index), index['marks'].get(i, {}).get('bars') or []) for i in self.item_ids(part) if self.price_of(i) is not None and self.buyable(i)), key=lambda o: (o[0], o[1])) for part in parts}
+        for device in self.item_ids(main):
+            codes = index['marks'].get(device, {}).get('codes') or []
+            price = self.price_of(device)
+            if not (codes or (index['marks'].get(device, {}).get('named'))) or price is None or not self.buyable(device):
+                continue
+            total = price * self.items[main - 1].qty
+            picks = [device]
+            for part in parts:
+                system = systems[part]
+                fitting = next((i for _, i, fits, bars in shelves[part] if (any((_code_hit(p, c) for p in fits for c in codes)) and not any((_code_hit(p, c) for p in bars for c in codes))) or (system and system[0] == part and self.link_holds(i, device, system[2], index) is True)), None)
+                if not fitting:
+                    picks = []
+                    break
+                picks.append(fitting)
+                total += (self.price_of(fitting) or 0.0) * self.items[part - 1].qty
+            if picks:
+                options.append((total, picks))
+        options.sort(key=lambda o: o[0])
+        if not options:
+            return ''
+        return 'lowest whole sets seen, requirements not yet checked: ' + '; '.join((f"{' + '.join(p)} = {t:g}" for t, p in options[:SET_SHOWN]))
+
+    def part_shelves(self) -> None:
+        """An item that shares its shelf with another requested item takes the store label that is its own name, when one is seen
+        and no item holds it yet."""
+        cat_key = self.category_key()
+        labels = sorted({str(row.get(cat_key) or '').strip() for row in self.rows.values()} - {''}) if cat_key else []
+        moved = False
+        for item in self.items:
+            name = _roots(item.name)
+            if not name or not item.shelf.strip() or not any((other is not item and _words(other.shelf) == _words(item.shelf) for other in self.items)):
+                continue
+            if any((other is not item and _roots(other.name) == name for other in self.items)):
+                continue
+            own = [label for label in labels if _roots(label) == name and _words(label) != _words(item.shelf)]
+            if len(own) == 1 and not any((_words(other.shelf) == _words(own[0]) for other in self.items)):
+                self.trace.append({'kind': 'shelf_parted', 'item': item.name, 'from': item.shelf, 'to': own[0]})
+                item.shelf = own[0]
+                moved = True
+        if moved:
+            self.owners_seen = {}
+            self.fit_cached = None
+
+    def fuller_label(self, number: int, label: str) -> str:
+        cat_key = self.category_key()
+        mine = _roots(self.items[number - 1].name)
+        if len(mine) < 2 or mine <= _roots(label) or not cat_key or (self.items[number - 1].shelf and _roots(label) == _roots(self.items[number - 1].shelf)):
+            return ''
+        return next((seen for seen in sorted({str(r.get(cat_key) or '') for r in self.rows.values()}) if seen and mine <= _roots(seen)), '')
+
+    def named_label(self, number: int, label: str) -> str:
+        """The store label the request named for this item, when a listing seen carries it and `label` is another one."""
+        item = self.items[number - 1]
+        cat_key = self.category_key()
+        wanted = _words(item.shelf or '')
+        if not wanted or not cat_key or _words(label) == wanted:
+            return ''
+        here = next((str(r.get(cat_key)) for r in self.rows.values() if _words(str(r.get(cat_key) or '')) == wanted), '')
+        return here
 
     def line_faults(self) -> list[str]:
+        self.adopt_labels()
         cat_key = self.category_key()
         ids = [i for i in self.cart_ids() if (self.held_units(i) or 0) > 0]
         if not ids or not cat_key:
@@ -2471,6 +3449,9 @@ class Kyo:
                 have = self.held_units(i)
                 if owner[i] == [n] and have != item.qty:
                     faults.append(f'{i} is held at {have} unit(s); item {n} ({item.name}) wants {item.qty}')
+                fuller = self.fuller_label(n, label[i]) or self.named_label(n, label[i])
+                if fuller:
+                    faults.append(f'{i} is from {label[i]}, but the store has the label {fuller}, which names item {n} ({item.name}) in full: take the line from there')
         if len(known) == len(self.items):
             for i in ids:
                 if not owner[i]:
@@ -2573,25 +3554,53 @@ class Kyo:
             text += '. Listings that look better: ' + ', '.join(better)
         return text + '. Fix the cart (or show the review is wrong by re-reading the records), then check out.'
 
-    def trail(self) -> tuple[str, bool]:
+    def refuse_trail(self) -> str:
+        """Once, before a decline with room left: follow what a requirement points at; what that showed, '' when nothing."""
+        live = {need for _, need in self.needs_now()}
+        if self.refuse_trailed or self.left() < TRAIL_ROOM or self.clock() > HUNT_BY or not any((need in live and need not in self.ref_values for _, need in self.refs)):
+            return ''
+        self.refuse_trailed = True
+        text, _ = self.trail(HUNT_BY)
+        return text + 'Search for those values now and buy what fits; end without a purchase only if nothing does.' if text else ''
+
+    def early_trail(self) -> str:
+        """Follow the chains of requirements that point at another listing, once, while there is room to act on what they say."""
+        live = {need for _, need in self.needs_now()}
+        if self.left() < TRAIL_ROOM or self.clock() > HUNT_BY or not any((need in live and need not in self.ref_values for _, need in self.refs)):
+            return ''
+        kept = (self.trails, self.trail_blocks)
+        self.trails, self.trail_room = 0, EARLY_TRAILS
+        try:
+            text, _ = self.trail(HUNT_BY)
+        finally:
+            (self.trails, self.trail_blocks), self.trail_room = kept, None
+        self.trace.append({'kind': 'early_trail', 'left': self.left(), 'values': list(self.ref_values.values())[:3]})
+        return text
+
+    def page_read(self, ident: str) -> bool:
+        """Whether a listing's page was read: opened, and through the store's page view when it has one apart from the attribute view."""
+        page = self.roles.get('offer')
+        return ident in self.opened and (not page or not self.single_target(page) or page in self.views.get(ident, ()))
+
+    def trail(self, stop: float | None=None) -> tuple[str, bool]:
         live = {need for _, need in self.needs_now()}
         pending = [need for _, need in self.refs if need in live and need not in self.ref_values]
         tool = self.roles.get('offer') or self.roles.get('open')
         target = self.single_target(tool)
         seen: list[str] = []
         lost: list[str] = []
-        while pending and self.trails < (6 if self.left() > 15 else 4) and (self.cost < SPEND_HARD):
+        while pending and self.trails < min(6 if self.left() > 15 else 4, self.trail_room or 6) and (self.cost < SPEND_HARD) and (stop is None or self.clock() <= stop):
             self.trails += 1
             records = []
             for ident in reversed(self.seen_order):
-                record = self.full.get(ident) or self.rows.get(ident) if ident in self.opened else None
+                record = self.full.get(ident) or self.rows.get(ident) if self.page_read(ident) else None
                 if record and len(records) < 45:
                     records.append('OPENED ' + _dump(_clip(record, 300))[:1400])
             for ident in reversed(self.seen_order):
                 if len(records) >= 60:
                     break
-                if ident not in self.opened or not (self.full.get(ident) or self.rows.get(ident)):
-                    records.append('ROW ' + _dump(_clip(self.rows.get(ident), 80))[:300])
+                if not self.page_read(ident) or not (self.full.get(ident) or self.rows.get(ident)):
+                    records.append('ROW ' + (_dump(_clip(self.full[ident], 120))[:700] if ident in self.full else _dump(_clip(self.rows.get(ident), 80))[:300]))
             prompt = TRAIL + '\n\nREQUIREMENTS WITH A VALUE ON ANOTHER LISTING:\n' + '\n'.join(pending)
             prompt += '\n\nRECORDS (newest first):\n' + '\n'.join(records)
             got = self.ask_json(prompt, [LIGHT] + ([HEAVY] if self.cost + HEAVY_ROOM <= SPEND_HARD else []), 4500) or {}
@@ -2607,15 +3616,15 @@ class Kyo:
                     continue
                 links = [l for l in _items(chain.get('links')) if isinstance(l, dict)]
                 ids = [str(l.get('id') or '').strip() for l in links]
-                if chain.get('done') is True and links and all((i in self.opened for i in ids)) and str(chain.get('value') or '').strip():
+                if chain.get('done') is True and links and all((self.page_read(i) for i in ids)) and str(chain.get('value') or '').strip():
                     self.ref_values[need] = str(chain['value']).strip()
                     self.version += 1
                     continue
-                if links and all((i in self.opened for i in ids)) and (not str(links[-1].get('find') or '').strip()):
+                if links and all((self.page_read(i) for i in ids)) and (not str(links[-1].get('find') or '').strip()):
                     self.ref_values[need] = str(chain.get('value') or '').strip() or f'as stated on {ids[-1]}'
                     self.version += 1
                     continue
-                closed = [i for i in ids if i in self.rows and i not in self.opened]
+                closed = [i for i in ids if i in self.rows and not self.page_read(i)]
                 if closed:
                     reach += [i for i in closed if i not in reach]
                 else:
@@ -2635,7 +3644,7 @@ class Kyo:
             for ident in reach[:max(0, min(3, 6 - len(seen)))]:
                 faults: list[str] = []
                 args = _shape({target: ident}, self.schemas.get(tool), 'args', faults)
-                if faults:
+                if faults or self.rushed():
                     break
                 reply = self.act(tool, args)
                 if reply is None or self.finished:
@@ -2653,29 +3662,37 @@ class Kyo:
             text += 'The order counts only after every page a requirement points at has been opened in full (a search row is not enough), following each page that refers to a further listing. Still to find and open: ' + ' | '.join(lost[:3]) + ". Search for it by its shop's name together with the values its description gives (the shop's other listings of that kind are not it), open the row of that shop whose page shows those values, apply the value its page gives, then check out."
         return (text, hold)
 
+    def not_maker_keys(self) -> tuple[Any, ...]:
+        """The row keys that cannot hold the name of who sells or makes a listing: its id, its label and its name. Any other
+        text field can, and the value must still appear word for word in the description being matched."""
+        return (self.id_key, self.category_key(), self.title_key())
+
     def shop_rows(self, about: str, ids: list[str]) -> list[str]:
+        not_names = self.not_maker_keys()
         low = about.lower()
         out = []
         for ident in ids:
             row = self.rows.get(ident) or {}
-            names = [str(v).strip() for k, v in row.items() if isinstance(v, str) and 2 < len(v.strip()) <= 40 and re.search('seller|shop|store|vendor|brand|maker|merchant', str(k), re.I)]
+            names = [str(v).strip() for k, v in row.items() if isinstance(v, str) and 2 < len(v.strip()) <= 40 and k not in not_names and v.strip().lower() not in NO_NAME]
             if ident not in self.opened and any((re.search('(?<![a-z0-9])' + re.escape(n.lower()) + '(?![a-z0-9])', low) for n in names)):
                 out.append(ident)
         return out
 
     def opened_shop(self, about: str) -> list[str]:
+        not_names = self.not_maker_keys()
         low = about.lower()
         out = []
         for ident in self.opened:
             row = self.rows.get(ident) or {}
-            names = [str(v).strip() for k, v in row.items() if isinstance(v, str) and 2 < len(v.strip()) <= 40 and re.search('seller|shop|store|vendor|brand|maker|merchant', str(k), re.I)]
+            names = [str(v).strip() for k, v in row.items() if isinstance(v, str) and 2 < len(v.strip()) <= 40 and k not in not_names and v.strip().lower() not in NO_NAME]
             if any((re.search('(?<![a-z0-9])' + re.escape(n.lower()) + '(?![a-z0-9])', low) for n in names)):
                 out.append(ident)
         return out
 
     def find_link(self, about: str, words: str) -> list[str]:
+        not_names = self.not_maker_keys()
         known: list[str] = []
-        named = {w for ident in self.shop_rows(about, list(self.rows)) + self.opened_shop(about) for k, v in (self.rows.get(ident) or {}).items() if isinstance(v, str) and len(v.strip()) <= 40 and re.search('seller|shop|store|vendor|brand|maker|merchant', str(k), re.I) for w in re.findall('[a-z0-9]{3,}', v.lower())}
+        named = {w for ident in self.shop_rows(about, list(self.rows)) + self.opened_shop(about) for k, v in (self.rows.get(ident) or {}).items() if isinstance(v, str) and len(v.strip()) <= 40 and k not in not_names and v.strip().lower() not in NO_NAME for w in re.findall('[a-z0-9]{3,}', v.lower())}
         values = {w for w in re.findall('[a-z0-9]+', (words or about).lower()) if len(w) >= 3 or w.isdigit()} - named - {'the', 'and', 'with', 'from', 'that', 'comes', 'listing', 'page', 'its', 'for', 'of'}
         for ident in self.opened_shop(about):
             stack, leaves = ([self.full.get(ident) or self.rows.get(ident) or {}], [])
@@ -2689,24 +3706,28 @@ class Kyo:
             if values and all((re.search('(?<![a-z0-9])' + re.escape(v) + '(?![a-z0-9])', text) for v in values)):
                 self.trace.append({'kind': 'link_known', 'id': ident})
                 return []
-        plan = self.search_template()
+        plan = self.value_template()
         memo = ' '.join(words.lower().split())
         if memo and memo in self.link_seen:
-            self.link_searches += 1
             known = self.shop_rows(about, self.link_seen[memo])
         elif plan and words:
             tool, base, field = plan
-            faults: list[str] = []
-            args = _shape({**base, field: words}, self.schemas.get(tool), 'args', faults)
-            if not faults:
+            for query in dict.fromkeys((words, ' '.join(words.split()[:2]))):
+                faults: list[str] = []
+                args = _shape({**base, field: query}, self.schemas.get(tool), 'args', faults)
+                if faults:
+                    break
                 self.link_searches += 1
                 reply = self.act(tool, args)
-                if reply is not None:
-                    observation = reply.get('observation')
-                    self.observe(tool, observation)
-                    self.link_seen[memo] = [i for i, _ in self.records_in(observation)]
-                    known = self.shop_rows(about, self.link_seen[memo])
-                    self.trace.append({'kind': 'link_search', 'words': words[:80], 'rows': known[:4]})
+                if reply is None:
+                    break
+                observation = reply.get('observation')
+                self.observe(tool, observation)
+                self.link_seen[memo] = [i for i, _ in self.records_in(observation)]
+                known = self.shop_rows(about, self.link_seen[memo])
+                self.trace.append({'kind': 'link_search', 'words': query[:80], 'rows': known[:4]})
+                if self.link_seen[memo]:
+                    break
         kind = {w for w in re.findall('[a-z0-9]{3,}', (words or about).lower())} - named - {'the', 'and', 'with', 'from', 'that', 'comes', 'listing', 'page', 'its', 'for'}
 
         def of_kind(ids: list[str]) -> list[str]:
@@ -2936,6 +3957,7 @@ class Kyo:
         if not calls or len(calls) + 1 > self.left():
             return ''
         self.fill_facts(list(lines), len(calls) + 3)
+        self.show_links(list(lines), len(calls) + 3)
         self.check_cart(list(lines), SPEND_HARD)
         if not self.verdicts.get(self.check_key(list(lines))):
             return ''
@@ -3217,11 +4239,21 @@ class Kyo:
                     out.append((cid, f'Not run (no step used): {absent[0]} is not in the cart, so there is nothing to take off. Cart now: ' + self.cart_text()))
                     continue
             ending = self.is_buy(name, args) or self.is_refuse(name, args)
+            plain_jobs = {tool for job, tool in self.roles.items() if job != 'search'}
             if ending and len(calls) > 1:
                 out.append((cid, 'Not run (no step used): send the finishing call on its own, after reading your other results.'))
                 continue
             if not ending and self.left() <= self.tail() and (self.roles.get('buy') or self.roles.get('refuse')):
                 out.append((cid, "Not run (no step used): the last steps are kept for checking out (with the shopper's approval of the basket when it is due) or ending without a purchase."))
+                continue
+            fresh = name not in plain_jobs and self.query_is_new(name, args)
+            asked_for = args
+            args = self.first_look(name, args, fresh)
+            if args != asked_for:
+                trimmed += f"\n[Kyo] This is a new search, so Kyo asked for its first page ({_dump(asked_for)} was the call you sent)."
+            args = self.row_ids(name, args)
+            if name == self.roles.get('search') and self.codes_dead and self.names_code(args):
+                out.append((cid, 'Not run (no step used): this store\'s search found nothing for a model or part code. Search by words and values, list the category, and read the codes on the rows.'))
                 continue
             mark = name + _dump(args)
             if not ending and name != self.roles.get('cart') and (mark in self.recent):
@@ -3246,6 +4278,7 @@ class Kyo:
                     mark = name + _dump(args)
             if ending and self.left() > 2:
                 if self.is_buy(name, args):
+                    hunted = self.hunt_cheaper()
                     wider = self.wider_hold()
                     if wider:
                         out.append((cid, wider + '\nCart now: ' + self.cart_text()))
@@ -3295,16 +4328,25 @@ class Kyo:
                         self.trace.append({'kind': 'line_hold', 'faults': faults[:6]})
                         out.append((cid, 'Not run yet (no step used). The cart does not match the request yet: ' + '; '.join(faults[:6]) + ". Fix those lines (the cart tool's own way to add or take off units), then check out.\nCart now: " + self.cart_text()))
                         continue
-                    read = self.fill_facts(self.cart_ids(), self.tail() + 3) + self.cheaper_rows()
+                    lines = self.cart_ids()
+                    read = self.fill_facts(lines, self.tail() + (1 if len(lines) >= 2 else 3))
+                    self.show_links(lines, self.tail() + 1)
+                    read += self.cheaper_rows()
                     verdict = self.check_cart()
                     if verdict:
                         seen = "Kyo read these listings' attributes for the check (one step each):\n" + '\n'.join(read) + '\n' if read else ''
+                        seen = (hunted + ' ' + self.below_cart() + '\n' if hunted else '') + seen
                         out.append((cid, 'Not run yet. ' + chain + seen + verdict + '\nCart now: ' + self.cart_text()))
                         continue
                     if reread and self.cost > SPEND_SOFT:
                         out.append((cid, "Not run yet (no step used). Kyo re-read the cart's listings just now:\n" + reread + '\nCheck out again when every line still shows stock and a price inside the budget; otherwise replace that line first.'))
                         continue
                 elif self.left() > 5:
+                    pointed = self.refuse_trail()
+                    if pointed:
+                        out.append((cid, 'Not run yet (no step used). ' + pointed))
+                        continue
+                    self.hunt_fits()
                     review = self.audit()
                     if review:
                         out.append((cid, 'Not run yet (no step used). ' + review))
@@ -3373,6 +4415,8 @@ class Kyo:
                 self.note_view(name, observation)
             plain = {tool for job, tool in self.roles.items() if job != 'search'}
             paged = self.more_pages(name, args, observation) if name not in plain and (not ending) else ''
+            paged += self.last_page_first(name, args, observation) if fresh and (not ending) else ''
+            paged += self.shorter_search(name, args, observation) if name not in plain and (not ending) else ''
             if self.single_target(name) and name not in (self.roles.get('cart'), self.roles.get('buy'), self.roles.get('refuse'), self.roles.get('ask')):
                 listing = self.ident(observation) if isinstance(observation, dict) else None
                 if listing:
@@ -3399,6 +4443,9 @@ class Kyo:
                 lines = [i for i in self.cart_ids() if not self.sold_out(i) and i not in self.dropped]
                 if len(lines) >= len(self.built):
                     self.built = lines
+            if name == self.roles.get('search') and self.names_code(args):
+                self.code_tries.append(bool(self.records_in(observation)))
+                self.codes_dead = len(self.code_tries) >= 2 and not any(self.code_tries)
             if name == self.roles.get('search') and self.records_in(observation):
                 self.searched = (self.searched + [dict(args)])[-8:]
             if name == self.roles.get('cart_view'):
@@ -3435,6 +4482,10 @@ class Kyo:
             swap = self.swap_hint()
             if swap:
                 text += '\n' + swap
+            if name == self.roles.get('cart') and self.bound and not self.finished:
+                misfit = self.fit_faults()
+                if misfit:
+                    text += '\n[Kyo] These lines do not work together yet: ' + '; '.join(misfit)
             if self.queued:
                 text += "\n[notes seen on Kyo's own calls] " + ' | '.join(self.queued)
                 self.queued = []
@@ -3504,10 +4555,15 @@ class Kyo:
         if opening is not None:
             opening = _restore(opening)
             self.absorb(opening)
+        moved = self.first_moves() if not self.finished else ''
+        self.env_gap = ENV_GAP
         intro = "SHOPPER'S REQUEST:\n" + self.request
         if opening is not None:
             intro += '\n\nWHAT THE STORE SHOWS FIRST:\n' + self.show(opening)
-        intro += '\n\nStart by searching for each item in its category and opening several listings in full, so the interviewer can see which properties these listings carry.\n\n' + self.status()
+        if moved:
+            intro += '\n\nKyo has searched for each item and read some of its listings (one step each):\n' + moved + '\nJudge these against the requirements and search further only for what is still missing.\n\n' + self.status()
+        else:
+            intro += '\n\nStart by searching for each item in its category and opening several listings in full, so the interviewer can see which properties these listings carry.\n\n' + self.status()
         self.chat = [{'role': 'system', 'content': GUIDE}, {'role': 'user', 'content': intro}]
         self.work(LOOP_CALLS, SPEND_HARD)
         if not self.finished:
