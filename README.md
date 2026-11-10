@@ -30,6 +30,7 @@ use the test card `4242 4242 4242 4242`. The card `4000 0000 0000 0002` is alway
 
 ## Contents
 
+- [How you and the assistant work together](#how-you-and-the-assistant-work-together)
 - [Using the assistant](#using-the-assistant)
 - [The agent team](#the-agent-team)
 - [How a purchase stays safe](#how-a-purchase-stays-safe)
@@ -41,6 +42,57 @@ use the test card `4242 4242 4242 4242`. The card `4000 0000 0000 0002` is alway
 - [Development](#development)
 - [Known limitations](#known-limitations)
 - [More documents](#more-documents)
+
+## How you and the assistant work together
+
+You talk only to the assistant page. Behind it, the agent team works through the store's tools
+in a cart of its own, and the purchase itself happens only when you approve and pay.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor You
+    participant Page as Assistant page
+    box rgb(232, 242, 255) Agent team
+        participant Team as Coordinator and agents
+        participant Gate as Gateway
+    end
+    participant Store as Store (catalog, stock, payments)
+
+    You->>Page: "Buy the cheapest mug with a capacity of at least 300 ml, under $20."
+    Page->>Team: Start a run with its own, empty cart
+    Team->>Gate: Search, open and compare listings
+    Gate->>Store: Store tools (at most 40 steps per run)
+    Store-->>Gate: Listings with price, stock and attributes
+    loop Each preference the request left open (3 questions unless you set a limit)
+        Team->>Page: "What colour would you like for the mug?"
+        Page->>You: Question card
+        You-->>Page: "Green", or "I don't mind"
+        Note over You,Page: No answer within 15 minutes counts as "I don't mind"
+    end
+    Team->>Gate: Put the chosen listing in the run's cart
+    Team->>Team: Review re-reads prices and stock and checks every requirement
+    Team->>Page: Approval card with every line and the total
+    Page->>You: Approve and pay?
+    alt You approve and enter a card
+        You->>Page: Card number (it goes to the store, never to the agents)
+        Page->>Store: Charge, take the stock and place the order, all at once
+        alt Stock or total changed since the card was shown
+            Store-->>Page: Refused, nothing charged
+            Page-->>Team: The order failed, and why
+            Team->>Page: A new approval card with a replacement (up to 3 tries)
+        else Nothing changed
+            Store-->>Page: Order placed
+            Page->>You: Order confirmation
+        end
+    else You refuse, or do not answer within 15 minutes
+        Page-->>Team: Not approved
+        Team->>Page: Run ends, nothing bought, and its cart is emptied
+    end
+```
+
+If nothing in the store meets every requirement, the run stops before the approval card, says
+"Sorry, nothing in the store meets all of your requirements.", and buys nothing.
 
 ## Using the assistant
 
