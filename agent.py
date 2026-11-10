@@ -922,8 +922,9 @@ class Kyo:
         value = (self.rows.get(ident) or {}).get(self.price_key) if self.price_key else None
         if isinstance(value, dict):
             value = next((v for v in value.values() if isinstance(v, (int, float)) and (not isinstance(v, bool))), None)
-        if isinstance(value, str) and re.fullmatch('\\s*\\d+(\\.\\d+)?\\s*', value):
-            value = float(value)
+        if isinstance(value, str):
+            figure = re.fullmatch('\\s*[^\\d\\s]{0,3}\\s?(\\d[\\d,]*(?:\\.\\d+)?)\\s*[A-Za-z]{0,6}\\.?\\s*', value)
+            value = float(figure.group(1).replace(',', '')) if figure else None
         return float(value) if isinstance(value, (int, float)) and (not isinstance(value, bool)) else None
 
     def buyable(self, ident: str) -> bool:
