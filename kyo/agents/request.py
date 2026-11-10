@@ -276,6 +276,13 @@ def parse_request(request: str, tools: list[dict[str, Any]]) -> Brief:
     if re.search(APPROVAL, text, re.I):
         step = {"step": "get the shopper's approval", "when": "order", "messages": 1}
         brief.process.append(step)
+        # "Buy a red mug, and ask me before you buy": the approval clause is not the product.
+        text = re.sub(
+            rf",?\s*\b(?:and|but|then)\s+(?:[\w']+\s+){{0,3}}?{APPROVAL}[^.;!?]*",
+            " ",
+            text,
+            flags=re.I,
+        )
     brief.pick, brief.pick_measure = _pick(text)
     brief.budget, text, each = read_money(text)
     if each:

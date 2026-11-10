@@ -168,10 +168,19 @@ def test_no_messages_without_an_ask_tool():
     assert parse_request("Buy a mug.", [tool("checkout")]).messages == 0
 
 
-def test_approval_becomes_a_process_step():
-    brief = parse("Buy a mug, but get my approval before ordering.")
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Buy a mug, but get my approval before ordering.",
+        "Buy a mug, and ask me before you buy.",
+        "Buy a mug and check with me first.",
+        "Buy a mug. Check with me before you buy it.",
+    ],
+)
+def test_approval_becomes_a_process_step(text):
+    brief = parse(text)
     assert brief.process == [{"step": "get the shopper's approval", "when": "order", "messages": 1}]
-    assert brief.items[0].name.startswith("mug")
+    assert [(i.name, i.musts) for i in brief.items] == [("mug", [])]
 
 
 def test_step_limit():
