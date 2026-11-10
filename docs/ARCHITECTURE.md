@@ -2,9 +2,10 @@
 
 ## Starting point
 
-`agent.py` is one class, `Kyo`, with 119 methods sharing about 90 fields. It works, but
-every concern can read and change every other concern's state, so no part can be tested,
-replaced, or run on its own.
+When the team was built for version 1.0.0, `agent.py` was one class, `Kyo`, with 119
+methods sharing about 90 fields. It worked, but every concern could read and change every
+other concern's state, so no part could be tested, replaced, or run on its own. The method
+names below refer to that version.
 
 ## Target
 
@@ -46,9 +47,9 @@ The rules that make the agents independent:
 | Catalog | Search, page, open and remember listings | Listing memory, learned store shape | `absorb`, `ident`, `learn_rows`, `category_key`, `read_shape`, `paging`, `more_pages`, `fill_facts`, `widen`, `widen_singly` |
 | Interview | Ask about unstated preferences | Questions asked, message allowance | `interview`, `plan_lanes`, `lane_keys`, `next_ask`, `send`, `hear`, `take_heard` |
 | Selection | Choose the listing for each item | Rejection reasons | The fit rules in `GUIDE`, and the model's choices in `work` |
-| Cart | Change the cart and detect drift | Cart lines | `note_cart`, `cart_calls`, `line_faults`, `count_fixes`, `fix_counts`, `held_units` |
-| Review | Judge carts and declines independently | Verdicts | `check_cart`, `audit`, `audit_call`, `replacements` |
-| Process | Carry out steps the request demands | Proof that steps happened | `gate`, `gate_due` |
+| Cart | Change the cart, then check the store's cart against the lines it wanted | Cart lines | `note_cart`, `cart_calls`, `line_faults`, `count_fixes`, `fix_counts`, `held_units` |
+| Review | Judge carts and declines independently, matching each line to the item it is for | Verdicts | `check_cart`, `audit`, `audit_call`, `replacements` |
+| Process | Carry out steps the request demands at the order or the ending, with no tool that changes the cart or ends the run | Proof that steps happened | `gate`, `gate_due` |
 | Notes | Read free-text changes from the store | Notes already seen | `loose_lines`, `take_note` |
 | Coordinator | Decide the next step and apply limits | Episode progress | `run`, `work`, `run_calls`, `finish`, `status`, `offered` |
 
@@ -65,6 +66,13 @@ The team replaces most of `Kyo`, but not all of it:
 - **The conversational buying loop is gone.** `GUIDE` is unused: the coordinator's workflow
   chooses every step, and models only help with specific decisions. This makes runs
   predictable and testable, but a model cannot improvise around an unusual store.
+- **Steps due before choosing are not carried out.** The process agent acts at the order and
+  at the ending. A step the request wants before the team chooses ("check with me which
+  brand first"), and the brief's `ask_first` list, would need a new stage for it and a way
+  to read free-text replies into requirements.
+- **The cart is not viewed again right before checkout.** The cart agent checks the store's
+  cart after each of its changes, and the review re-reads every line's price and stock, but
+  a change that happens to the cart itself in between is caught only by the checkout.
 - **The model paths are tested with scripted replies only.** They have not been run against
   a live model.
 
@@ -77,10 +85,14 @@ agent team --> tools ---+
 ```
 
 Shoppers and agents go through the same services, so a cart rule or stock check cannot be
-skipped by either. The team never holds payment details, and a purchase made by the
-assistant requires the shopper's approval of the exact cart and total.
+skipped by either. The team never holds payment details. A purchase made by the assistant
+happens only through the shopper's approval of a card showing every line and the total, and
+it is refused if the total has changed since.
 
-## The baseline stays
+## The baseline lives on
 
-`agent.py` remains unchanged as a standalone agent and as the behaviour the team is
-compared with. New code lives in the `kyo` package.
+`agent.py` remains a standalone agent, maintained on its own since version 1.0.0: it now
+keeps to a time limit, searches on without the model before declining, and asks its
+questions as lists, none of which the team does. The team keeps its version 1.0 copy of the
+prompts the baseline has revised since, and `tests/test_prompts.py` lists those prompts. New
+code for the application lives in the `kyo` package.
