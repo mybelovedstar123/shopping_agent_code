@@ -32,6 +32,7 @@ use the test card `4242 4242 4242 4242`. The card `4000 0000 0000 0002` is alway
 
 - [How you and the assistant work together](#how-you-and-the-assistant-work-together)
 - [Using the assistant](#using-the-assistant)
+- [What happens when...](#what-happens-when)
 - [The agent team](#the-agent-team)
 - [How a purchase stays safe](#how-a-purchase-stays-safe)
 - [How well it works](#how-well-it-works)
@@ -115,6 +116,74 @@ amount), "cheapest", and "largest" or "smallest" with the measure to compare ("t
 largest capacity"). Words it does not recognise count as requirements, so an unusual request is
 more likely to end with "nothing fits" than with a wrong purchase. To give the agents a model's
 judgement, see [Configuration](#configuration).
+
+## What happens when...
+
+**Something in my cart sells out because someone else bought it?** Nothing is reserved when you
+add it to a cart: the store only checks that enough is in stock at that moment, and stock goes
+down only when an order is paid. Two shoppers can cart the last unit, and the first to pay gets
+it. Paying is atomic, so the store never sells more than it has.
+
+```mermaid
+flowchart TD
+    A["You add the last unit to your cart"] --> B{"Does someone else<br/>pay for it first?"}
+    B -->|"No"| C["You pay and the order is placed"]
+    B -->|"Yes"| D["Your cart marks the line:<br/>Sold out. Remove it to check out."]
+    D --> E["Pay is refused:<br/>'... no longer has enough stock.'<br/>Nothing is charged and your cart is kept"]
+    E --> F["Remove the line or lower the quantity,<br/>then pay again"]
+    B -->|"Yes, while an assistant<br/>run waits for your approval"| G["Your approval is refused<br/>and nothing is charged"]
+    G --> H["The team re-reads the listings<br/>and chooses another that fits"]
+    H --> I["A new approval card<br/>with the replacement and its total"]
+    I -->|"After 3 refused orders"| J["The run ends with nothing bought"]
+```
+
+When only part of a line is left, the cart says "Only N left. Lower the quantity to check out."
+The assistant sees the same warnings when it looks at its cart. For example, if the Harbor Mug
+in orange from the example above sells out while you are looking at its approval card, your
+approval is refused, and the next card offers the Harbor Mug in green for $14.98.
+
+**The price changes after I added something?** Carts always show the current price, and an
+order is charged at the price when you pay. The checkout page remembers the total it showed
+you: if the cart costs anything else when you press Pay, the payment is refused ("The cart total
+is now $19.98, not the $14.98 shown. Check it and pay again.") and the page shows the new total.
+An approval card works the same way. The assistant also re-reads the prices of its lines before
+it asks you, so the total it shows is the one you will pay, and it does not offer a cart over
+your budget.
+
+**I press "Add to cart" for something already in my cart?** It adds to the quantity you already
+have. The quantity box on the cart page sets the quantity instead. A line holds 1 to 99 units,
+and never more than the store has in stock.
+
+**My card is declined?** Nothing happens: no order, no stock taken, and your cart stays as it
+was. Only the last four digits of a card that was charged are stored.
+
+**I don't answer a question?** After 15 minutes the assistant takes it as "I don't mind" and
+carries on. An approval card you do not answer within 15 minutes counts as a refusal, and
+nothing is bought.
+
+**I change my mind while it works?** An answer can change the request: "I can only spend $15
+now" lowers the budget. When you asked it to check with you before buying, replies such as
+"yes", "go ahead" or "no problem" approve, and "no", "not now" or "wait" stop the purchase.
+
+**Can the assistant buy without asking me?** No. Its checkout tool only shows you an approval
+card. The order is placed by your own approval, with a card number that the agents never
+receive. A card number typed into a request or an answer is replaced with "[number removed]"
+before anything stores or reads it.
+
+**Does it touch my own cart?** No. Each run has its own cart, and an unapproved run's cart is
+emptied when the run ends.
+
+**Can I shop without an account?** You can browse, but carts and orders need an account. An item
+you try to add while logged out is not kept after you log in.
+
+**Returns, refunds, shipping or tax?** None of these exist: this is a demonstration store, and
+every order is simply "paid".
+
+**Where is my data, and how do I start over?** In a SQLite file, `kyo_shop.sqlite3` in the
+folder you start `python -m kyo` from, or in the `shop-data` volume with Docker. Delete the file
+(or run `docker compose down -v`) to start again with a fresh catalog.
+
+**How many requests can I run?** Up to 3 at a time, each up to 2,000 characters.
 
 ## The agent team
 
@@ -271,6 +340,8 @@ browser and saves screenshots. It needs Selenium and Chrome, and is run by hand.
   at the order or the ending, such as asking for approval, but not ones meant to happen before it
   chooses ("check with me which brand first").
 - **Part compatibility** ("a battery that fits it") needs a model to read the request.
+- **Nothing is reserved in a cart.** An item can sell out between carting and paying; see
+  [What happens when...](#what-happens-when).
 - **Approval compares the total.** A changed total refuses the order, but a different cart with
   the same total would not be noticed. Nothing changes the run's cart while its approval card
   is waiting.
