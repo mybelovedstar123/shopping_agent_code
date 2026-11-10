@@ -55,8 +55,10 @@ def register(session: Session, email: str, name: str, password: str) -> User:
         raise AccountError("Enter a valid email address.")
     if not name or len(name) > 100:
         raise AccountError("Enter your name.")
-    if not MIN_PASSWORD_LENGTH <= len(password) <= MAX_PASSWORD_LENGTH:
+    if len(password) < MIN_PASSWORD_LENGTH:
         raise AccountError(f"Passwords must be at least {MIN_PASSWORD_LENGTH} characters.")
+    if len(password) > MAX_PASSWORD_LENGTH:
+        raise AccountError(f"Passwords can be at most {MAX_PASSWORD_LENGTH} characters.")
     user = User(email=email, name=name, password_hash=hash_password(password))
     session.add(user)
     try:
