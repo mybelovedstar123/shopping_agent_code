@@ -75,6 +75,48 @@ def test_too_many_is_explained_and_changes_nothing(client, app):
     assert "Your cart is empty" in reply.text
 
 
+def add_from_product_page(client, sku, quantity):
+    """Submit the product page's own "Add to cart" form, with whatever hidden fields it has."""
+    form = re.search(
+        r'<form class="add-to-cart".*?</form>', client.get(f"/product/{sku}").text, re.S
+    )
+    hidden = dict(re.findall(r'type="hidden" name="([^"]+)" value="([^"]*)"', form.group(0)))
+    return post_form(client, f"/cart/{sku}", {**hidden, "quantity": quantity})
+
+
+def quantity_in_cart(page, sku):
+    return int(re.search(rf'id="qty-{sku}"[^>]*value="(\d+)"', page.text).group(1))
+
+
+def test_add_to_cart_adds_to_what_is_already_in_the_cart(client, app):
+    sku, _, price, stock = in_stock(app)
+    register(client)
+    add_from_product_page(client, sku, 1)
+    reply = add_from_product_page(client, sku, 2)
+    assert reply.status_code == 200 and quantity_in_cart(reply, sku) == 3
+    assert f"${price * 3 / 100:.2f}" in text_of(reply)
+    reply = add_from_product_page(client, sku, stock - 2)
+    assert reply.status_code == 422 and f"Only {stock} of {sku} in stock" in reply.text
+    assert quantity_in_cart(reply, sku) == 3, "a refused add changes nothing"
+
+
+def test_the_cart_page_still_sets_the_quantity(client, app):
+    sku = in_stock(app)[0]
+    register(client)
+    add_from_product_page(client, sku, 3)
+    assert quantity_in_cart(add(client, sku, 1), sku) == 1
+
+
+def test_add_to_cart_is_capped_at_the_quantity_limit(client, app):
+    sku = in_stock(app)[0]
+    with transaction(app.state.sessions) as session:
+        session.scalar(select(Product).where(Product.sku == sku)).stock = 500
+    register(client)
+    add(client, sku, 98)
+    reply = add_from_product_page(client, sku, 2)
+    assert reply.status_code == 422 and "Quantity must be between 0 and 99" in reply.text
+
+
 def test_invalid_quantity_is_explained(client, app):
     sku = in_stock(app)[0]
     register(client)

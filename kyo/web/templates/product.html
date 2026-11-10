@@ -10,6 +10,7 @@
   {% if product.stock > 0 %}
   <p class="success">{{ product.stock }} in stock</p>
   <form class="add-to-cart" action="/cart/{{ product.id }}" method="post"><input type="hidden" name="csrf_token" value="{{ request.state.csrf_token }}">
+    <input type="hidden" name="add" value="yes">
     <label>Quantity
       <input class="quantity" type="number" name="quantity" min="1" max="{{ product.stock }}" value="1">
     </label>

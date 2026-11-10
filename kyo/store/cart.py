@@ -72,6 +72,20 @@ def set_line(
     return view(session, user_id, run_id)
 
 
+def add_to_line(
+    session: Session, user_id: int, sku: str, quantity: int, run_id: int | None = None
+) -> dict[str, Any]:
+    """Add to a product's quantity, as an "Add to cart" button does."""
+    if quantity < 1:
+        raise CartError(f"Quantity must be between 1 and {MAX_QUANTITY}.")
+    product = get_product(session, sku)
+    if product is None:
+        raise CartError(f"No product {sku}.")
+    line = next((x for x in _lines(session, user_id, run_id) if x.product_id == product.id), None)
+    held = line.quantity if line is not None else 0
+    return set_line(session, user_id, sku, held + quantity, run_id)
+
+
 def clear(session: Session, user_id: int, run_id: int | None = None) -> None:
     for line in _lines(session, user_id, run_id):
         session.delete(line)

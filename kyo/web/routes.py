@@ -252,13 +252,19 @@ def cart_page(request: Request, session: Db) -> HTMLResponse | RedirectResponse:
 
 @router.post("/cart/{sku}", response_model=None)
 def change_cart(
-    request: Request, sku: str, session: Db, quantity: Annotated[str, Form()] = "1"
+    request: Request,
+    sku: str,
+    session: Db,
+    quantity: Annotated[str, Form()] = "1",
+    add: Annotated[str, Form()] = "",
 ) -> HTMLResponse | RedirectResponse:
+    """Set a line's quantity, or with `add`, as the product page sends, add to it."""
     user = request.state.user
     if not user:
         return login_first(request)
+    change = cart.add_to_line if add == "yes" else cart.set_line
     try:
-        cart.set_line(session, user.id, sku, int(quantity))
+        change(session, user.id, sku, int(quantity))
     except ValueError:
         error = "Enter a whole number for the quantity."
     except cart.CartError as refused:
