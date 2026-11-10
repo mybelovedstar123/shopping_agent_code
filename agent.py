@@ -24,6 +24,7 @@ ENV_GAP = 0.25
 OPEN_GAP = 0.5
 TABLE_KEYS = 18
 CHEAPER_SHOWN = 4
+QUIET_WORD = 4
 OPEN_LATER = 2
 PAGE_ATTR_CHARS = 700
 PAGE_REST_CHARS = 300
@@ -46,6 +47,7 @@ STOCK_OUT = '^(?:no|none|false|0|n)$|out[ _-]?of[ _-]?stock|sold[ _-]?out|unavai
 HUNT_WHOLE = 49
 HUNT_GRACE = 25.0
 HUNT_VALUE_CHARS = 30
+ASK_WORDS = '\\b(?:one|each|single|first|time|many|much|several|list|once|separate\\w*|split|short\\w*|questions?|ask\\w*|turn|lot|too|all)\\b'
 HUNT_ROUNDS = 2
 HUNT_KEEP = 10
 HUNT_IDLE = 4
@@ -955,6 +957,7 @@ class Kyo:
         self.bare_pages: dict[str, int] = {}
         self.code_tries: list[bool] = []
         self.codes_dead = False
+        self.hear_reads = 0
         self.fit_hunted = False
         self.hunt_mark = ''
         self.hunt_tried: dict[int, set[str]] = {}
@@ -3297,9 +3300,40 @@ class Kyo:
             self.budget = heard['budget']
 
     def hear(self, sent: list[tuple[int, str, str]], models: tuple[str, ...]=(HEAVY, LIGHT)) -> dict[str, Any]:
+        if self.quiet_reply(sent):
+            self.trace.append({'kind': 'quiet_reply', 'a': sent[0][2][:80]})
+            return {}
+        self.hear_reads += 1
         prompt = HEAR + '\n\nITEMS:\n' + '\n'.join((f'item {n}: {it.name}' for n, it in enumerate(self.items, 1)))
-        prompt += '\n\nQUESTIONS AND ANSWERS:\n' + '\n'.join((f'{i}. (about item {n}) Q: {q}\nA: {a}' for i, (n, q, a) in enumerate(sent, 1)))
+        prompt += '\n\nQUESTIONS AND ANSWERS:\n' + '\n'.join((f"{i}. ({f'about item {n}' if n else 'about several items'}) Q: {q}\nA: {a}" for i, (n, q, a) in enumerate(sent, 1)))
         return self.ask_json(prompt, list(models), 2500) or {}
+
+    @_soft(False)
+    def quiet_reply(self, sent: list[tuple[int, str, str]]) -> bool:
+        """Whether an answer needs no reading: it names nothing the questions, the items, the listings' keys or their values name
+        and holds no number, and it asks nothing about how to ask. Race 15: 5112 of 5160 non-need replies are such (race 14: 5050 of 5055) and
+        the check misses few need replies once the keys count (race 15: 35 of 1355 by question words alone). A reading costs a
+        model call, and a race model call about 5-10 s of a 300 s episode. The first answer of an episode is always read: it
+        tells whether this shopper takes lists."""
+        if self.hear_reads < 1:
+            return False
+        known: frozenset[str] = frozenset()
+        for number, item in enumerate(self.items, 1):
+            known |= _spelled(item.name) | _spelled(item.shelf or '')
+            for need in item.musts + item.told:
+                known |= _spelled(' '.join(re.findall('[A-Za-z0-9]+', need.split(':', 1)[0])))
+        for label, name, _, _ in self.key_table():
+            known |= _spelled(name) | _spelled(label)
+        for record in self.full.values():
+            for value in (_fact_block(record) or {}).values():
+                known |= {w for w in _spelled(' '.join(re.findall('[A-Za-z0-9]+', str(value)))) if len(w) >= QUIET_WORD}
+        for _, question, answer in sent:
+            asked = re.sub('\\b(?:what|which|would|you|like|for|the|please|tell|me|and|or)\\b', ' ', question, flags=re.I)
+            mine = known | _spelled(' '.join(re.findall('[A-Za-z0-9]+', asked)))
+            said = _spelled(' '.join(re.findall('[A-Za-z0-9]+', answer)))
+            if re.search('\\d', answer) or said & mine or re.search(ASK_WORDS, answer, re.I):
+                return False
+        return True
 
     def gate(self, stage: str) -> tuple[bool, str]:
         steps = [p for p in self.process if p['when'] == stage]
