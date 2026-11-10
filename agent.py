@@ -19,14 +19,26 @@ BRIEF_BY = 120.0
 BRIEF_GAP = 10.0
 OUTAGE_BY = 150.0
 SHOW_CHARS = 450
+HUNT_STEPS = 24
 ENV_GAP = 0.25
 TABLE_KEYS = 18
 CHEAPER_SHOWN = 4
 TRAIL_ROOM = 15
+FIT_PAGES = 2
 CRASH_TURNS = 3
 SHORT_KEEP = 8
 SET_SHOWN = 2
 STOCK_OUT = '^(?:no|none|false|0|n)$|out[ _-]?of[ _-]?stock|sold[ _-]?out|unavailable|not[ _-]?available'
+HUNT_WHOLE = 49
+HUNT_GRACE = 25.0
+HUNT_VALUE_CHARS = 30
+HUNT_ROUNDS = 2
+HUNT_KEEP = 10
+HUNT_IDLE = 4
+HUNT_PAGE_NEW = 5
+HUNT_FIT_WORDS = 4
+HUNT_FIT_OPENS = 4
+HUNT_COMMON = 0.6
 HUNT_BY = 200.0
 TITLE_CHARS = 200
 TEXT_CHARS = 3000
@@ -463,6 +475,20 @@ def _join_twins(held: str, value: str) -> str:
     _FIRST_SPELLING[joined] = _FIRST_SPELLING.get(held, held)
     return joined
 
+def _glued(text: str) -> str:
+    """A number and its short unit as one word, however it is spelled: "65 W" and "65W" are one value, "45 W" another."""
+    return re.sub('(\\d)\\s+([a-z]{1,3})(?![a-z0-9])', '\\1\\2', text.lower())
+
+def _text_words(text: str) -> set[str]:
+    """The words of a row or a search, a number and its short unit also as one word."""
+    low = text.lower()
+    return set(re.findall('[a-z0-9]+', low)) | set(re.findall('[a-z0-9]+', _glued(low)))
+
+def _value_tokens(value: str) -> list[str]:
+    """A value's words a search or a row can hold: long ones, else short ones of two characters holding a letter (XL, 4g, 65w), else its numbers."""
+    low = _glued(value)
+    return re.findall('[a-z0-9]{3,}', low) or re.findall('[0-9]+[a-z]|[0-9]*[a-z][a-z0-9]+', low) or re.findall('[0-9]+', low)
+
 def _fold_twins(node: Any, depth: int=0) -> Any:
     """One line per property: a block spelling a key twice keeps the first spelling, with both values when they differ, so that
     one element of a list is enough ("clock shape: rectangle" and "clock_shape: rectangular, square" hold square). About a tenth
@@ -846,6 +872,7 @@ class Kyo:
         self.searched: list[dict[str, Any]] = []
         self.link_searches = 0
         self.link_seen: dict[str, list[str]] = {}
+        self.hunts = 0
         self.env_gap = ENV_GAP
         self.env_spent = 0.0
         self.env_count = 0
@@ -855,9 +882,14 @@ class Kyo:
         self.row_keys: set[str] = set()
         self.refuse_trailed = False
         self.env_at = 0.0
+        self.hunt_stem: dict[tuple[int, tuple[str, ...]], str] = {}
+        self.hunt_no_noun: set[int] = set()
         self.bare_pages: dict[str, int] = {}
         self.code_tries: list[bool] = []
         self.codes_dead = False
+        self.fit_hunted = False
+        self.hunt_mark = ''
+        self.hunt_tried: dict[int, set[str]] = {}
         self.page_args: dict[str, str] = {}
         self.page_queries: dict[str, set[str]] = {}
 
@@ -1940,6 +1972,262 @@ class Kyo:
         most = max((distinct for _, _, distinct in kept), default=0)
         ranked = [(mean, key) for mean, key, distinct in kept if distinct * 10 >= most * 9]
         return min(ranked)[1] if ranked else None
+
+    def hunt_words(self, number: int) -> tuple[str, list[str]]:
+        """The item's noun, a word its store label holds that no other item's label holds (a search reads labels too, so it
+        keeps the rows to this item), with the words a further search can add, most promising first: a word on most rows finds
+        nothing new and a word on one row finds little else, so the words kept sit between."""
+        cat_key = self.category_key()
+        item = self.items[number - 1]
+        title = self.title_key()
+        labels = [str(row.get(cat_key) or '') for row in self.rows.values() if self.owns(item, str(row.get(cat_key) or ''))] if cat_key else []
+        names = [str(row.get(title) or '') for row in self.rows.values() if title and cat_key and self.owns(item, str(row.get(cat_key) or ''))]
+        for record in self.full.values():
+            if cat_key and self.owns(item, str(record.get(cat_key) or '')):
+                names.append(' '.join((str(v) for v in (_fact_block(record) or {}).values() if isinstance(v, str) and len(v) <= HUNT_VALUE_CHARS)))
+        others = {w for n, other in enumerate(self.items, 1) if n != number for w in re.findall('[a-z]{4,}', ((other.shelf or '') + ' ' + other.name).lower())}
+        label = max(labels, key=labels.count).lower() if labels else (item.shelf or item.name).lower()
+        nouns = [w for w in re.findall('[a-z]{4,}', label) if w not in others]
+        noun = '' if number in self.hunt_no_noun else (max(nouns, key=len) if nouns else '')
+        if not names:
+            return (noun, [])
+        counts: dict[str, int] = {}
+        for name in names:
+            for word in {w.lower() for w in re.findall("[A-Za-z][A-Za-z'-]{2,}", name)}:
+                counts[word] = counts.get(word, 0) + 1
+        own = _roots(item.shelf or '') | _roots(item.name)
+        ceiling = max(2, int(len(names) * HUNT_COMMON))
+        words = [w for w, n in counts.items() if 2 <= n <= ceiling and w != noun and _roots(w) and not _roots(w) & own]
+        words.sort(key=lambda w: (-counts[w], w))
+        return (noun, words)
+
+    def rows_of_item(self, number: int) -> int:
+        cat_key = self.category_key()
+        item = self.items[number - 1]
+        return sum((1 for row in self.rows.values() if not cat_key or self.owns(item, str(row.get(cat_key) or ''))))
+
+    @_soft('')
+    def hunt_cheaper(self) -> str:
+        """Search on, without the model, while the pick is the cheapest and the store shows only part of what it holds.
+
+        Searches stop at a page cap while reporting the whole total (race 14: 96 rows of 199; race 15: 49 rows of up to 1000, no
+        price order, no price filter), so the lowest price of a kind can sit where no first search reaches. Race 15's search reads
+        titles, categories, brands, sellers and attribute VALUES and wants every word (22642 of 91849 matched words were found in
+        an attribute value only), so all of an item's required values together list nearly its whole fitting set, and adding a
+        further word splits a set too long for the cap. After a requirement was dropped the fitting set widens: that decided 7
+        tasks of race 15, nearly every agent buying a dearer listing, and a rare passing run had kept trying new words (9 cents
+        after 98 and 20). Each search is one step and no model call; cheaper_rows then opens the lowest rows."""
+        mark = _dump([self.needs_now(), self.budget, sorted(self.gone)])
+        if self.brief.get('pick') != 'cheapest' or self.hunts >= HUNT_ROUNDS or self.hunt_mark == mark:
+            return ''
+        plan = self.value_template()
+        if not plan or not self.price_key or self.clock() > HUNT_BY:
+            return ''
+        tool, base, field = plan
+        room = min(HUNT_STEPS, self.left() - self.tail() - HUNT_KEEP - 2 * len(self.items))
+        if room < 3:
+            return ''
+        self.hunts += 1
+        self.hunt_mark = mark
+        cart = self.cart_ids()
+        numbers = list(range(1, len(self.items) + 1))
+        share = max(3, room // max(1, len(numbers)))
+        spent = 0
+        fresh_total = 0
+        for number in numbers:
+            if spent >= room or self.finished:
+                break
+            used, gained = self.hunt_item(number, tool, base, field, min(share, room - spent))
+            spent += used
+            fresh_total += gained
+        self.trace.append({'kind': 'hunt', 'steps': spent, 'new_rows': fresh_total, 'cart': cart})
+        if spent:
+            self.wider_held = True
+        return f'Kyo ran {spent} more searches for the lowest price, one step each, and they showed {fresh_total} more rows.' if spent else ''
+
+    def hunt_item(self, number: int, tool: str, base: dict[str, Any], field: str, room: int) -> tuple[int, int]:
+        """Up to `room` searches for one item: all its required values together, then split by further words."""
+        tried = self.hunt_tried.setdefault(number, set())
+        noun, _ = self.hunt_words(number)
+        values = [value for value, _ in self.value_words(number)]
+        spent = gained = idle = 0
+        issued = refused = False
+
+        def run(query: str) -> bool:
+            """Search `query` to its last page or the room, reading again no page this episode has read; whether it found any row."""
+            nonlocal spent, gained, idle, issued, refused
+            tried.add(query.lower())
+            faults: list[str] = []
+            args = _shape({**base, field: query}, self.schemas.get(tool), 'args', faults)
+            refused = refused or bool(faults)
+            if faults or spent >= room or self.finished:
+                return False
+            issued = True
+            holds_values = bool(values) and all((v.lower() in query.lower() for v in values))
+            found = False
+            walked: set[str] = set()
+            while not self.finished and self.clock() <= HUNT_BY + HUNT_GRACE:
+                mark = self.call_mark(tool, args)
+                if mark in walked:
+                    return found
+                walked.add(mark)
+                if mark in self.read_calls:
+                    seen = self.read_calls[mark]
+                    new = HUNT_PAGE_NEW
+                elif spent >= room:
+                    return found
+                else:
+                    before = self.rows_of_item(number)
+                    reply = self.act(tool, args)
+                    spent += 1
+                    if reply is None:
+                        return found
+                    seen = reply.get('observation')
+                    self.observe(tool, seen)
+                    new = self.rows_of_item(number) - before
+                    gained += new
+                    idle = 0 if new else idle + 1
+                rows = self.records_in(seen)
+                found = found or bool(rows)
+                if holds_values:
+                    self.value_rows.update((i for i, _ in rows))
+                page = self.paging(tool, seen)
+                if not page or page[3] is None or (new < HUNT_PAGE_NEW and page[0] > HUNT_WHOLE):
+                    return found
+                faults = []
+                args = _shape({**args, page[2]: page[3]}, self.schemas.get(tool), 'args', faults)
+                if faults:
+                    return found
+            return found
+        mark = (number, tuple(values))
+        stem = self.hunt_stem.get(mark)
+        if stem is None:
+            tries = ([' '.join((values + [noun])).strip(), ' '.join(values)] if values else []) + ([' '.join((values[:-1] + [noun])).strip()] if len(values) >= 2 else []) + ([noun] if noun else [])
+            stem = ''
+            for query in dict.fromkeys(tries):
+                issued = False
+                if run(query):
+                    stem = query
+                    break
+                if not issued:
+                    return (spent, gained)
+                if query == noun:
+                    self.hunt_no_noun.add(number)
+                    noun = ''
+            self.hunt_stem[mark] = stem
+        while spent < room and idle < HUNT_IDLE and not refused and not self.finished and self.clock() <= HUNT_BY + HUNT_GRACE:
+            _, words = self.hunt_words(number)
+            words = [w for w in words if f'{w} {stem}'.strip().lower() not in tried and w not in stem.lower().split()]
+            if not words:
+                break
+            run(f'{words[0]} {stem}'.strip())
+        return (spent, gained)
+
+    @_soft(list)
+    def hunt_fits(self) -> list[str]:
+        """Search on, without the model, before ending without a purchase.
+
+        Race 15: 495 of 2340 episodes of 13 leaders ended without a purchase on a task that has a right answer, and on 433 of them
+        another agent held a cart the store's answer set accepted, so a fit existed within reach; the same holds in practice worlds
+        (a fit past the page cap, "no in-stock jeans list a slim fit"). A requirement's value and its words find listings the
+        first searches did not show; the rows naming them are opened so that the audit judges their attributes. Returns what
+        was read."""
+        if self.fit_hunted or self.clock() > HUNT_BY:
+            return []
+        plan = self.value_template()
+        if not plan:
+            return []
+        tool, base, field = plan
+        keep = self.tail() + len(self.items) + 1
+        spare = self.left() - keep
+        if spare < 3:
+            return []
+        self.fit_hunted = True
+        cat_key = self.category_key()
+        held = [str((self.rows.get(i) or {}).get(cat_key) or '') for i in self.cart_ids() if (self.held_units(i) or 0) > 0] if cat_key else []
+        numbers = [n for n, item in enumerate(self.items, 1) if not any((self.owns(item, label) for label in held))] or list(range(1, len(self.items) + 1))
+        wanted = {number: {w for value, _ in self.value_words(number) for w in _value_tokens(value)} for number in numbers}
+        paged = self.unread_pages(tool, wanted, min(FIT_PAGES, spare // 2))
+        room = min(HUNT_STEPS, self.left() - self.tail() - HUNT_KEEP)
+        spent = 0
+        for number in numbers if room >= 3 else []:
+            item = self.items[number - 1]
+            pairs = self.value_words(number)
+            noun, words = self.hunt_words(number)
+            tries = [f'{family} {value} {noun}'.strip() for family in self.series_for(number) for value in ([v for v, _ in pairs][:1] or [''])]
+            tries += [f'{value} {noun}'.strip() for value, _ in pairs] + [value for value, _ in pairs if noun] + [f'{word} {noun}'.strip() for word in words[:HUNT_FIT_WORDS]] + ([noun] if noun else [])
+            share = max(2, room // max(1, len(numbers)))
+            used = 0
+            for query in dict.fromkeys(tries):
+                if spent >= room or used >= share or self.finished or self.clock() > HUNT_BY + HUNT_GRACE:
+                    break
+                faults: list[str] = []
+                args = _shape({**base, field: query}, self.schemas.get(tool), 'args', faults)
+                if faults:
+                    continue
+                reply = self.act(tool, args)
+                spent += 1
+                used += 1
+                if reply is None:
+                    return []
+                self.observe(tool, reply.get('observation'))
+        picks: list[str] = []
+        for number in numbers:
+            item = self.items[number - 1]
+            pool = [i for i in self.seen_order if i not in self.full and self.buyable(i) and (not cat_key or self.owns(item, str((self.rows.get(i) or {}).get(cat_key) or '')))]
+            cap = self.budget if isinstance(self.budget, (int, float)) else None
+            pool = [i for i in pool if cap is None or (self.price_of(i) or 0) <= cap]
+            words = wanted.get(number) or set()
+            pool.sort(key=lambda i: (-len(words & _text_words(_dump(self.rows.get(i) or {}))), self.price_of(i) if self.price_of(i) is not None else float('inf')))
+            picks += pool[:HUNT_FIT_OPENS]
+        read: list[str] = []
+        for start in range(0, len(picks), HUNT_FIT_OPENS):
+            if self.clock() > HUNT_BY + HUNT_GRACE:
+                break
+            read += self.fill_facts(picks[start:start + HUNT_FIT_OPENS], keep)
+        self.trace.append({'kind': 'hunt_fits', 'pages': paged, 'searches': spent, 'opened': len(read)})
+        return read
+
+    def unread_pages(self, tool: str, wanted: dict[int, set[str]], room: int) -> int:
+        """Up to `room` further pages of the earliest searches that hold a required value, each item its share first, before any
+        new words; the steps it took. A search whose rows all belong to another item is left. In a practice world accepted rows
+        sat on unread pages of the episode's own searches in nearly every wrong decline, and in races 13-15 about 23% of passing
+        carts were first seen on page 2 or later."""
+        spent = 0
+        cat_key = self.category_key()
+        share = max(1, room // max(1, len(wanted)))
+        for limit in (share, room):
+            for number, words in wanted.items():
+                stop = min(room, spent + limit)
+                for mark, (name, args) in list(self.read_args.items()):
+                    text = ' '.join((v for v in args.values() if isinstance(v, str))).lower()
+                    if name != tool or not words & _text_words(text):
+                        continue
+                    seen = self.read_calls[mark]
+                    owners = {self.owner_of(str(record.get(cat_key) or '')) for _, record in self.records_in(seen)} if cat_key else set()
+                    if owners and 0 not in owners and number not in owners:
+                        continue
+                    call, walked = args, {mark}
+                    while spent < stop and not self.finished:
+                        page = self.paging(tool, seen)
+                        if not page or page[3] is None:
+                            break
+                        faults: list[str] = []
+                        call = _shape({**call, page[2]: page[3]}, self.schemas.get(tool), 'args', faults)
+                        now = self.call_mark(tool, call) if not faults else ''
+                        if faults or now in walked:
+                            break
+                        walked.add(now)
+                        if now in self.read_calls:
+                            seen = self.read_calls[now]
+                            continue
+                        reply = self.act(tool, call)
+                        spent += 1
+                        if reply is None:
+                            return spent
+                        seen = reply.get('observation')
+                        self.observe(tool, seen)
+        return spent
 
     def call_mark(self, name: str, args: dict[str, Any]) -> str:
         """One spelling per call: words in any case and spacing, a number at its first value left out."""
@@ -3828,6 +4116,7 @@ class Kyo:
                     mark = name + _dump(args)
             if ending and self.left() > 2:
                 if self.is_buy(name, args):
+                    hunted = self.hunt_cheaper()
                     wider = self.wider_hold()
                     if wider:
                         out.append((cid, wider + '\nCart now: ' + self.cart_text()))
@@ -3884,12 +4173,18 @@ class Kyo:
                     verdict = self.check_cart()
                     if verdict:
                         seen = "Kyo read these listings' attributes for the check (one step each):\n" + '\n'.join(read) + '\n' if read else ''
+                        seen = (hunted + ' ' + self.below_cart() + '\n' if hunted else '') + seen
                         out.append((cid, 'Not run yet. ' + chain + seen + verdict + '\nCart now: ' + self.cart_text()))
                         continue
                     if reread and self.cost > SPEND_SOFT:
                         out.append((cid, "Not run yet (no step used). Kyo re-read the cart's listings just now:\n" + reread + '\nCheck out again when every line still shows stock and a price inside the budget; otherwise replace that line first.'))
                         continue
                 elif self.left() > 5:
+                    pointed = self.refuse_trail()
+                    if pointed:
+                        out.append((cid, 'Not run yet (no step used). ' + pointed))
+                        continue
+                    self.hunt_fits()
                     review = self.audit()
                     if review:
                         out.append((cid, 'Not run yet (no step used). ' + review))

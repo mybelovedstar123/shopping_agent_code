@@ -20,11 +20,12 @@ def test_buys_after_finding_and_carting_a_listing(play):
     assert trace[-1]["kind"] == "end" and trace[-1]["finished"] is True
 
 
-def test_first_early_decline_is_held_without_spending_a_step(play):
+def test_first_early_decline_is_held_and_the_agent_searches_before_ending(play):
     trace, harness = play([("decline", {}), ("decline", {})])
-    assert harness.store_calls == ["decline"]
     assert kinds(trace).count("turn") == 2
     assert "search in ways you have not tried" in tool_text(harness)
+    assert harness.store_calls.count("decline") == 1 and harness.store_calls[-1] == "decline"
+    assert "find" in harness.store_calls, "it searches on its own before ending"
 
 
 def test_schema_violation_is_rejected_without_a_store_call(play):
@@ -41,7 +42,7 @@ def test_unknown_tool_is_rejected_without_a_store_call(play):
 
 def test_repeated_identical_read_is_answered_from_memory(play):
     _, harness = play(
-        [("find", {"q": "lamp"}), ("find", {"q": "lamp"}), ("decline", {}), ("decline", {})]
+        [("find", {"q": "lamp"}), ("find", {"q": "lamp"}), ("add", {"id": "SKU-1001", "n": 1}), ("buy", {})]
     )
     assert harness.store_calls.count("find") == 1
     assert "you just made this same call" in tool_text(harness)
