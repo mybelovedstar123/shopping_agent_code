@@ -10,7 +10,7 @@ from ..fit import check_need, key_names_property, same_kind
 from ..runtime.agent import Agent
 
 
-def _measure(listing: Listing, measure: str) -> float | None:
+def stated_measure(listing: Listing, measure: str) -> float | None:
     """The number a listing states for a measure, or None when it states none."""
     for key, value in listing.attributes.items():
         if key_names_property(key, measure):
@@ -90,7 +90,7 @@ class SelectionAgent(Agent):
         if pick in ("most", "least"):
             if unread:
                 return None, [r.id for r in unread]
-            stated = [(_measure(r, measure), r) for r in fits]
+            stated = [(stated_measure(r, measure), r) for r in fits]
             stated = [(value, r) for value, r in stated if value is not None]
             if not stated:
                 return None, []

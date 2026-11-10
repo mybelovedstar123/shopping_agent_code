@@ -16,6 +16,7 @@ from ..fit import check_need, same_kind
 from ..models.base import Model, ModelError, ask_json, listed
 from ..prompts import AUDIT, CHECK
 from ..runtime.agent import Agent
+from .selection import stated_measure
 
 
 def _ledger(brief: Brief) -> str:
@@ -27,6 +28,14 @@ def _ledger(brief: Brief) -> str:
         lines.append(f"budget: at most {brief.budget} ({brief.budget_scope})")
     lines.append(f"pick: {brief.pick} {brief.pick_measure}".strip())
     return "\n".join(f"- {line}" for line in lines)
+
+
+def _extreme_first(listings: list[Listing], pick: str, measure: str) -> list[Listing]:
+    """The listings that state the measure, the most (or least) of it first."""
+    stated = [(stated_measure(r, measure), r) for r in listings]
+    stated = [(value, r) for value, r in stated if value is not None]
+    stated.sort(key=lambda pair: pair[0], reverse=pick == "most")
+    return [r for _, r in stated]
 
 
 def _assign(brief, lines, records, given) -> dict[int, str]:
@@ -159,7 +168,16 @@ class ReviewAgent(Agent):
 
     @staticmethod
     def _pick_problems(brief, owner, records, ruled_out) -> list[str]:
-        """A cheaper listing that clearly fits every requirement means the cart is wrong."""
+        """A cheaper listing that clearly fits every requirement means the cart is wrong, and
+        for a most or least pick, so does a line that does not state the measure."""
+        if brief.pick in ("most", "least"):
+            silent = [
+                i
+                for i in dict.fromkeys(owner.values())
+                if i in records and stated_measure(records[i], brief.pick_measure) is None
+            ]
+            ruled_out += silent
+            return [f"{i} does not state its {brief.pick_measure}" for i in silent]
         if brief.pick != "cheapest":
             return []
         problems = []
@@ -219,9 +237,11 @@ class ReviewAgent(Agent):
             ]
             mine = [r for r in mine if self._within_budget(brief, item, r)]
             verdicts = {r.id: [check_need(n, r).met for n in needs] for r in mine}
-            good = [r.id for r in mine if all(v is True for v in verdicts[r.id])]
+            good = [r for r in mine if all(v is True for v in verdicts[r.id])]
+            if brief.pick in ("most", "least"):
+                good = _extreme_first(good, brief.pick, brief.pick_measure)
             if good:
-                fits[str(number)] = good[:4]
+                fits[str(number)] = [r.id for r in good[:4]]
             else:
                 missing.append(item.name)
             unread += [r.id for r in mine if not r.opened and None in verdicts[r.id]]

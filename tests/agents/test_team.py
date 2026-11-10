@@ -392,3 +392,11 @@ def test_a_small_step_limit_in_the_request_is_kept():
     lamps = [lamp(f"L{n}", colour="blue") for n in range(8)] + [lamp("L8")]
     _, store = shop("Buy a red desk lamp in at most 6 steps. Do not ask me anything.", lamps)
     assert store.steps <= 6
+
+
+def test_a_most_pick_declines_when_no_listing_states_the_measure():
+    result, store = shop(
+        "Buy the mug with the largest capacity. Do not ask me anything.",
+        [mug("A", colour="blue"), mug("B", colour="red")],
+    )
+    assert result["outcome"] == "declined" and store.order is None

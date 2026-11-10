@@ -182,3 +182,21 @@ def test_a_line_shared_by_two_items_must_hold_both_quantities():
     short = review({"A": 1}, records, items=items, assign={"0": "A", "1": "A"})
     assert not short["ok"] and "A is held at 1, lamp and lamp wants 2" in short["problems"]
     assert review({"A": 2}, records, items=items, assign={"0": "A", "1": "A"})["ok"]
+
+
+def test_a_most_pick_fails_a_line_that_does_not_state_the_measure():
+    reply = review({"A": 1}, [lamp(colour="red")], pick="most", pick_measure="height")
+    assert "A does not state its height" in reply["problems"] and reply["ruled_out"] == ["A"]
+    assert review(
+        {"A": 1}, [lamp(colour="red", height="40 cm")], pick="most", pick_measure="height"
+    )["ok"]
+
+
+def test_decline_audit_for_a_most_pick_offers_only_listings_stating_the_measure():
+    records = [
+        lamp("A", colour="red"),
+        lamp("B", colour="red", height="30 cm"),
+        lamp("C", colour="red", height="45 cm"),
+    ]
+    assert decline(records, pick="most", pick_measure="height")["fits"] == {"1": ["C", "B"]}
+    assert decline(records[:1], pick="most", pick_measure="height")["fits"] == {}
