@@ -847,6 +847,7 @@ class Kyo:
         self.confirmed: str | None = None
         self.completed = False
         self.link_tried: set[str] = set()
+        self.adopted: dict[str, int] = {}
         self.capped: set[tuple[str, float]] = set()
         self.factless: set[tuple[str, str]] = set()
         self.trail_room: int | None = None
@@ -860,6 +861,7 @@ class Kyo:
         self.opened: set[str] = set()
         self.views: dict[str, set[str]] = {}
         self.fit_cached: tuple[Any, dict[str, Any]] | None = None
+        self.owners_seen: dict[tuple[str, int], int] = {}
         self.refs: list[tuple[int, str]] = []
         self.ref_values: dict[str, str] = {}
         self.trails = 0
@@ -2782,12 +2784,30 @@ class Kyo:
         if len(self.items) == 1 and (not rows):
             rows = [(label, key, carried, len(values)) for label, key, carried, values in table]
         rows.sort(key=lambda r: (-r[2], measured.get(r[1], False), -r[3]))
-        keys = [key for _, key, _, _ in rows if not any((_names(prop, _stem(key)) for prop in settled)) and (not re.search(NOT_PROPERTY, key))]
-        return [key for key in keys if not re.search(CATCH_ALL, key)] + [key for key in keys if re.search(CATCH_ALL, key)]
+        every = [key for _, key, _, _ in rows if not any((_names(prop, _stem(key)) for prop in settled))]
+        keys = [key for key in every if not re.search(NOT_PROPERTY, key) or re.search('\\w[ _]models?\\b', key)]
+        return [key for key in keys if not re.search(CATCH_ALL, key)] + [key for key in keys if re.search(CATCH_ALL, key)] + [key for key in every if key not in keys]
+
+    def adopt_labels(self) -> None:
+        cat_key = self.category_key()
+        if len(self.items) < 2 or not cat_key:
+            return
+        self.part_shelves()
+        labels = {str(record.get(cat_key) or '') for record in self.full.values()} - {''}
+        strays = [label for label in labels if not self.owner_of(label)]
+        orphans = [n for n in range(1, len(self.items) + 1) if not any((self.owner_of(label) == n and label not in self.adopted for label in labels))]
+        if strays and len(orphans) == 1:
+            self.adopted.update({label: orphans[0] for label in strays})
+            self.trace.append({'kind': 'adopted', 'item': orphans[0], 'labels': strays})
 
     def owner_of(self, label: str) -> int:
         if not label:
             return 0
+        if label in self.adopted:
+            return self.adopted[label]
+        known = self.owners_seen.get((label, len(self.items)))
+        if known is not None:
+            return known
         words = _words(label)
         long = _roots(label)
         best, top = (0, 0.0)
@@ -2801,10 +2821,11 @@ class Kyo:
                 score = len(long & mine) / max(1, len(long | mine))
             if score > top:
                 best, top = (number, score)
+        self.owners_seen[(label, len(self.items))] = best
         return best
 
     def owns(self, item: Item, label: str) -> bool:
-        return bool(label) and item in self.items and (self.owner_of(label) == self.items.index(item) + 1)
+        return bool(label) and item in self.items and (self.owner_of(label) == self.items.index(item) + 1 or _words(label) == _words(item.shelf or ''))
 
     def records_of_item(self, number: int) -> int:
         cat_key = self.category_key()
@@ -2812,6 +2833,7 @@ class Kyo:
         return sum((1 for record in self.full.values() if cat_key and self.owns(item, str(record.get(cat_key) or '')) and _fact_block(record)))
 
     def plan_lanes(self, count: int) -> dict[int, list[str]]:
+        self.adopt_labels()
         table = self.key_table()
         settled = []
         for number, item in enumerate(self.items, 1):
@@ -3367,7 +3389,46 @@ class Kyo:
             return ''
         return 'lowest whole sets seen, requirements not yet checked: ' + '; '.join((f"{' + '.join(p)} = {t:g}" for t, p in options[:SET_SHOWN]))
 
+    def part_shelves(self) -> None:
+        """An item that shares its shelf with another requested item takes the store label that is its own name, when one is seen
+        and no item holds it yet."""
+        cat_key = self.category_key()
+        labels = sorted({str(row.get(cat_key) or '').strip() for row in self.rows.values()} - {''}) if cat_key else []
+        moved = False
+        for item in self.items:
+            name = _roots(item.name)
+            if not name or not item.shelf.strip() or not any((other is not item and _words(other.shelf) == _words(item.shelf) for other in self.items)):
+                continue
+            if any((other is not item and _roots(other.name) == name for other in self.items)):
+                continue
+            own = [label for label in labels if _roots(label) == name and _words(label) != _words(item.shelf)]
+            if len(own) == 1 and not any((_words(other.shelf) == _words(own[0]) for other in self.items)):
+                self.trace.append({'kind': 'shelf_parted', 'item': item.name, 'from': item.shelf, 'to': own[0]})
+                item.shelf = own[0]
+                moved = True
+        if moved:
+            self.owners_seen = {}
+            self.fit_cached = None
+
+    def fuller_label(self, number: int, label: str) -> str:
+        cat_key = self.category_key()
+        mine = _roots(self.items[number - 1].name)
+        if len(mine) < 2 or mine <= _roots(label) or not cat_key or (self.items[number - 1].shelf and _roots(label) == _roots(self.items[number - 1].shelf)):
+            return ''
+        return next((seen for seen in sorted({str(r.get(cat_key) or '') for r in self.rows.values()}) if seen and mine <= _roots(seen)), '')
+
+    def named_label(self, number: int, label: str) -> str:
+        """The store label the request named for this item, when a listing seen carries it and `label` is another one."""
+        item = self.items[number - 1]
+        cat_key = self.category_key()
+        wanted = _words(item.shelf or '')
+        if not wanted or not cat_key or _words(label) == wanted:
+            return ''
+        here = next((str(r.get(cat_key)) for r in self.rows.values() if _words(str(r.get(cat_key) or '')) == wanted), '')
+        return here
+
     def line_faults(self) -> list[str]:
+        self.adopt_labels()
         cat_key = self.category_key()
         ids = [i for i in self.cart_ids() if (self.held_units(i) or 0) > 0]
         if not ids or not cat_key:
@@ -3388,6 +3449,9 @@ class Kyo:
                 have = self.held_units(i)
                 if owner[i] == [n] and have != item.qty:
                     faults.append(f'{i} is held at {have} unit(s); item {n} ({item.name}) wants {item.qty}')
+                fuller = self.fuller_label(n, label[i]) or self.named_label(n, label[i])
+                if fuller:
+                    faults.append(f'{i} is from {label[i]}, but the store has the label {fuller}, which names item {n} ({item.name}) in full: take the line from there')
         if len(known) == len(self.items):
             for i in ids:
                 if not owner[i]:
