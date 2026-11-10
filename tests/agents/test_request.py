@@ -69,9 +69,31 @@ def test_a_measurement_is_not_a_budget():
     assert brief.items[0].name == "desk lamp"
 
 
+def test_a_budget_with_a_thousands_separator_is_one_amount():
+    brief = parse("Buy a black office chair under $1,200.")
+    assert brief.budget == 1200 and brief.items[0].name == "office chair"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Buy a red desk lamp, at most twenty dollars.",
+        "Buy a desk lamp with at least three settings.",
+    ],
+)
+def test_at_most_and_at_least_are_not_pick_rules(text):
+    assert parse(text).pick == "any"
+
+
 def test_budget_scope_each():
     assert parse("Buy 2 mugs under $5 each.").budget_scope == "each"
     assert parse("Buy 2 mugs under $5.").budget_scope == "total"
+    assert parse("Buy 2 mugs, each under $5.").budget_scope == "each"
+
+
+def test_each_elsewhere_in_the_request_leaves_the_budget_a_total():
+    brief = parse("Buy 2 red desk lamps under $30. Each one must be red.")
+    assert brief.budget == 30 and brief.budget_scope == "total"
 
 
 @pytest.mark.parametrize(
@@ -135,6 +157,12 @@ def test_step_limit():
     assert parse("Buy a mug in 12 steps.").steps == 12
 
 
+def test_step_limit_is_not_part_of_the_product():
+    brief = parse("Buy a red desk lamp within 12 steps.")
+    assert brief.steps == 12 and brief.items[0].name == "desk lamp"
+    assert brief.items[0].musts == ["colour: red"]
+
+
 def test_an_unreadable_request_still_gives_one_item():
     assert len(parse("Hello there.").items) == 1
 
@@ -185,6 +213,24 @@ def test_rules_take_over_when_the_model_fails(reply):
     brief, source, context = read(ScriptedModel([reply]))
     assert source == "rules" and brief.roles["buy"] == "checkout"
     assert context.notes
+
+
+def test_malformed_parts_of_a_model_brief_are_dropped_or_read_as_one_value():
+    brief, source, _ = read(
+        ScriptedModel(
+            [
+                {
+                    **MODEL_BRIEF,
+                    "items": [{"name": "kettle", "musts": "colour: red"}],
+                    "roles": {"buy": "checkout", "search": ["search_products"]},
+                    "fits": [{"item": 1, "with": 2}],
+                    "lookups": 7,
+                }
+            ]
+        )
+    )
+    assert source == "model" and brief.items[0].musts == ["colour: red"]
+    assert brief.roles == {"buy": "checkout"} and brief.fits == [] and brief.lookups == []
 
 
 def test_no_model_uses_rules():

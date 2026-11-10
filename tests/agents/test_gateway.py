@@ -68,3 +68,15 @@ def test_observations_can_be_reviewed_since_a_step():
     entries = gateway.on_observations({"since": 1}, context)["entries"]
     assert [e["step"] for e in entries] == [2]
     assert entries[0]["observation"]["note"] == "Budget is now 5"
+
+
+def test_a_store_failure_becomes_an_error_observation():
+    gateway, store, context = make()
+
+    def broken(args):
+        raise ConnectionError("database is locked")
+
+    store._get_product = broken
+    reply = gateway.on_call({"name": "get_product", "args": {"product_id": "A1"}}, context)
+    assert reply["ok"] and not reply["finished"] and gateway.step == 1
+    assert "ConnectionError: database is locked" in reply["observation"]["error"]

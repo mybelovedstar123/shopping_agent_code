@@ -42,6 +42,15 @@ def perform(agent, answers, stage="order", steps=(APPROVAL,), cart=CART):
         ("No, too expensive", False),
         ("Please don't", False),
         ("What colour is it?", None),
+        ("Yes, no problem.", True),
+        ("Sure, why not.", True),
+        ("Okay, I don't mind.", True),
+        ("Not a problem, go ahead.", True),
+        ("No problem.", True),
+        ("I don't mind.", None),
+        ("No, thanks.", False),
+        ("No problem, but don't buy it yet.", False),
+        ("Not now, wait until Friday.", False),
     ],
 )
 def test_read_approval(answer, expected):
@@ -120,6 +129,15 @@ def test_step_the_model_says_is_missing_blocks_the_ending():
     model = ScriptedModel([{"steps": [{"step": "get approval", "done": False}], "call": None}])
     reply, _ = perform(ProcessAgent(model), [])
     assert not reply["proceed"] and reply["not_done"] == ["get approval"]
+
+
+def test_model_cannot_use_a_tool_the_steps_were_not_given():
+    model = ScriptedModel(
+        [{"steps": [], "call": {"tool": "update_cart", "args": {"product_id": "A", "quantity": 3}}}]
+    )
+    reply, asked = perform(ProcessAgent(model), ["Yes"])
+    assert [a["name"] for a in asked] == ["ask"], "the cart must not be touched"
+    assert reply["proceed"] and asked[0]["args"]["message"].startswith("May I place")
 
 
 def test_rules_take_over_when_the_model_fails():

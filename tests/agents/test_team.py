@@ -213,3 +213,239 @@ def test_team_declines_rather_than_buy_on_a_requirement_it_cannot_check():
     result, store = shop(request, products)
     assert result["outcome"] == "declined" and store.order is None
     assert "cannot be checked" in result["reason"]
+
+
+def test_two_items_one_listing_fits_are_both_bought():
+    """Never fewer units than requested, even when one listing suits both items."""
+    result, store = shop(
+        "Buy a mug and a white mug. Do not ask me anything.", [mug("A"), mug("B", colour="red")]
+    )
+    assert result["outcome"] == "purchased" and sum(store.order.values()) == 2
+    assert store.order.get("A", 0) >= 1, "the white mug must be bought"
+
+
+def test_two_items_of_one_kind_each_get_their_own_line():
+    result, store = shop(
+        "Buy a red mug and a blue mug. Do not ask me anything.",
+        [mug("R", colour="red"), mug("U", colour="blue")],
+    )
+    assert result["outcome"] == "purchased" and store.order == {"R": 1, "U": 1}
+
+
+def test_each_in_another_sentence_does_not_lift_a_total_budget():
+    result, store = shop(
+        "Buy 2 red desk lamps under $30. Each one must be red. Do not ask me anything.",
+        [lamp("L1", 20)],
+    )
+    assert result["outcome"] == "declined" and store.order is None
+
+
+class PriceRiseStore(ScenarioStore):
+    """Raises a listing's price once it is carted, saying so in the reply when `say` is set."""
+
+    def __init__(self, products, rise, price, say=False, **options):
+        super().__init__(products, **options)
+        self.rise, self.price, self.say = rise, price, say
+
+    def _update_cart(self, args):
+        result = super()._update_cart(args)
+        if args["product_id"] == self.rise and args["quantity"] > 0:
+            self.products[self.rise].price = self.price
+            if self.say:
+                result["note"] = f"The price of {self.rise} has increased to {self.price}."
+            self.rise = None
+        return result
+
+
+@pytest.mark.parametrize("say", [False, True])
+@pytest.mark.parametrize("max_steps", [6, 7, 30])
+def test_a_price_rise_after_carting_never_breaks_the_budget(say, max_steps):
+    store = PriceRiseStore([lamp("L1", 20)], "L1", 25.0, say=say)
+    result = run_team(
+        "Buy a red desk lamp under $22. Do not ask me anything.", store, max_steps=max_steps
+    )
+    assert store.order is None and result["outcome"] != "purchased"
+
+
+def test_the_reported_total_uses_the_price_read_before_checkout():
+    store = PriceRiseStore([lamp("L1", 20)], "L1", 21.0)
+    result = run_team("Buy a red desk lamp under $22. Do not ask me anything.", store, max_steps=6)
+    assert store.order == {"L1": 1} and result["total"] == 21.0
+
+
+def test_the_process_steps_cannot_change_the_reviewed_cart():
+    brief = {
+        "items": [{"name": "desk lamp", "shelf": "Desk Lamps", "musts": ["colour: red"]}],
+        "budget": 25,
+        "messages": 1,
+        "process": [{"step": "get the shopper's approval", "when": "order", "messages": 1}],
+        "roles": {
+            "search": "search_products",
+            "open": "get_product",
+            "cart": "update_cart",
+            "buy": "checkout",
+            "refuse": "decline_purchase",
+            "ask": "ask_shopper",
+        },
+    }
+    gate = {
+        "steps": [],
+        "call": {"tool": "update_cart", "args": {"product_id": "L1", "quantity": 3}},
+    }
+
+    def reply(prompt):
+        if prompt.startswith("You prepare a shopping task"):
+            return brief
+        if prompt.startswith("A shopping agent is about to"):
+            return gate
+        if prompt.startswith("You choose the questions"):
+            return {"ask": []}
+        return {"ok": True}
+
+    store = ScenarioStore([lamp("L1")], answers={"May I place": "Yes, go ahead."})
+    result = run_team(
+        "Buy a red desk lamp under $25. Get my approval before ordering.",
+        store,
+        model=ScriptedModel(reply),
+    )
+    assert store.order == {"L1": 1} and result["lines"] == {"L1": 1}
+
+
+def test_a_budget_given_in_an_answer_is_respected():
+    store = ScenarioStore(
+        [lamp("L1", 20, finish="matte"), lamp("L2", 12, finish="glossy")],
+        answers={"": "I don't mind, but I can only spend $15 now."},
+    )
+    result = run_team("Buy a desk lamp. Ask me at most 1 question.", store)
+    assert store.order == {"L2": 1} and result["brief"]["budget"] == 15
+
+
+GOOD_BRIEF = {
+    "items": [
+        {"name": "desk lamp", "shelf": "Desk Lamps", "quantity": 1, "musts": ["colour: red"]}
+    ],
+    "messages": 1,
+    "roles": {
+        "search": "search_products",
+        "open": "get_product",
+        "cart": "update_cart",
+        "buy": "checkout",
+        "refuse": "decline_purchase",
+        "ask": "ask_shopper",
+    },
+}
+
+
+@pytest.mark.parametrize(
+    "replies",
+    [
+        {"You choose the questions": {"ask": [{"item": "first", "label": "finish"}]}},
+        {
+            "You choose the questions": {"ask": [{"item": 1, "label": "finish"}]},
+            "A shopping agent asked": {"needs": [{"item": "lamp", "need": "finish: matte"}]},
+        },
+        {"You prepare a shopping task": {**GOOD_BRIEF, "fits": [{"item": 1, "with": 2}]}},
+        {"While a shopping agent works": {"kind": "change", "gone": 5, "add": "x"}},
+        {"You are the last check": {"ok": False, "problems": 3, "better": "L1"}},
+    ],
+)
+def test_malformed_model_replies_never_end_the_run(replies):
+    def reply(prompt):
+        for prefix, value in replies.items():
+            if prompt.startswith(prefix):
+                return value
+        if prompt.startswith("You prepare a shopping task"):
+            return GOOD_BRIEF
+        return {"ask": []} if prompt.startswith("You choose the questions") else "{}"
+
+    store = ScenarioStore([lamp("L1", finish="matte"), lamp("L2", finish="matte")])
+    result = run_team("Buy a red desk lamp.", store, model=ScriptedModel(reply))
+    assert result["outcome"] in ("purchased", "declined")
+
+
+class FlakyStore(ScenarioStore):
+    """Fails the first product page it is asked for."""
+
+    failed = False
+
+    def _get_product(self, args):
+        if not self.failed:
+            self.failed = True
+            raise ConnectionError("database is locked")
+        return super()._get_product(args)
+
+
+def test_one_store_failure_does_not_end_the_run():
+    store = FlakyStore([lamp("L1")])
+    result = run_team("Buy a red desk lamp. Do not ask me anything.", store)
+    assert result["outcome"] == "purchased" and store.order == {"L1": 1}
+
+
+def test_a_request_with_a_step_limit_can_still_buy():
+    result, store = shop(
+        "Buy a red desk lamp within 12 steps. Do not ask me anything.", [lamp("L1")]
+    )
+    assert result["outcome"] == "purchased" and store.order == {"L1": 1}
+
+
+def test_a_small_step_limit_in_the_request_is_kept():
+    lamps = [lamp(f"L{n}", colour="blue") for n in range(8)] + [lamp("L8")]
+    _, store = shop("Buy a red desk lamp in at most 6 steps. Do not ask me anything.", lamps)
+    assert store.steps <= 6
+
+
+def test_a_most_pick_declines_when_no_listing_states_the_measure():
+    result, store = shop(
+        "Buy the mug with the largest capacity. Do not ask me anything.",
+        [mug("A", colour="blue"), mug("B", colour="red")],
+    )
+    assert result["outcome"] == "declined" and store.order is None
+
+
+class RepricedAtCheckoutStore(ScenarioStore):
+    """The first checkout finds a carted line's price raised, and refuses the order."""
+
+    def _checkout(self, args):
+        if self.products["L1"].price != 35.0:
+            self.products["L1"].price = 35.0
+            return {"accepted": False, "note": "The cart has changed since it was approved."}
+        return super()._checkout(args)
+
+
+def test_a_price_rise_at_checkout_switches_to_another_fit_within_budget():
+    store = RepricedAtCheckoutStore([lamp("L1", 26.98), lamp("L2", 21.98)])
+    result = run_team("Buy a red desk lamp under $30. Do not ask me anything.", store)
+    assert result["outcome"] == "purchased" and store.order == {"L2": 1}
+    assert result["total"] == 21.98
+
+
+def test_an_approval_worded_with_no_problem_is_approval():
+    _, store = shop(
+        "Buy a red desk lamp. Do not ask me anything. Get my approval before ordering.",
+        [lamp("L1")],
+        answers={"May I place": "Yes, no problem."},
+    )
+    assert store.order == {"L1": 1}
+
+
+def test_a_budget_over_a_thousand_dollars_is_read_whole():
+    chair = Product("C", "Chair C", "Office Chairs", 350.0, {"colour": "black"})
+    result, store = shop("Buy a black office chair under $1,200. Do not ask me anything.", [chair])
+    assert result["outcome"] == "purchased" and store.order == {"C": 1}
+
+
+class CappingStore(ScenarioStore):
+    """Quietly holds at most one unit of L1, whatever quantity is asked for."""
+
+    def _update_cart(self, args):
+        result = super()._update_cart(args)
+        if args["product_id"] == "L1" and self.cart.get("L1", 0) > 1:
+            self.cart["L1"] = 1
+            result = self._view_cart({})
+        return result
+
+
+def test_a_cart_that_drifts_from_the_plan_is_noticed():
+    store = CappingStore([lamp("L1"), lamp("L2")])
+    result = run_team("Buy 2 red desk lamps. Do not ask me anything.", store)
+    assert store.order == {"L2": 2} and result["lines"] == {"L2": 2}

@@ -79,6 +79,8 @@ class HttpModel:
             message = data["choices"][0]["message"]
         except (KeyError, IndexError, TypeError):
             raise ModelError("the model endpoint returned no choices") from None
+        if not isinstance(message, dict):
+            raise ModelError("the model endpoint returned no message")
         content = message.get("content") or ""
         calls = message.get("tool_calls") or []
         if not content and not calls:

@@ -60,7 +60,12 @@ class GatewayAgent(Agent):
         args, faults = shape_args(args, self._schemas[name])
         if faults:
             return {"ok": False, "error": "; ".join(faults)}
-        result = self.store.call(name, args)
+        try:
+            result = self.store.call(name, args)
+        except Exception as error:  # a store failure is an observation, like any refusal
+            # The store may have acted before failing, so the step counts.
+            problem = f"the store could not do {name}: {type(error).__name__}: {error}"
+            result = {"observation": {"error": problem}, "finished": False}
         self.step += 1
         self.finished = bool(result.get("finished"))
         observation = result.get("observation")

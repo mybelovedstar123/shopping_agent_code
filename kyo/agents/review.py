@@ -11,11 +11,12 @@ import json
 from typing import Any
 
 from ..compat import fit_problem
-from ..domain import Brief, Listing
+from ..domain import Brief, Item, Listing
 from ..fit import check_need, same_kind
-from ..models.base import Model, ModelError, ask_json
+from ..models.base import Model, ModelError, ask_json, listed
 from ..prompts import AUDIT, CHECK
 from ..runtime.agent import Agent
+from .selection import stated_measure
 
 
 def _ledger(brief: Brief) -> str:
@@ -27,6 +28,41 @@ def _ledger(brief: Brief) -> str:
         lines.append(f"budget: at most {brief.budget} ({brief.budget_scope})")
     lines.append(f"pick: {brief.pick} {brief.pick_measure}".strip())
     return "\n".join(f"- {line}" for line in lines)
+
+
+def _extreme_first(listings: list[Listing], pick: str, measure: str) -> list[Listing]:
+    """The listings that state the measure, the most (or least) of it first."""
+    stated = [(stated_measure(r, measure), r) for r in listings]
+    stated = [(value, r) for value, r in stated if value is not None]
+    stated.sort(key=lambda pair: pair[0], reverse=pick == "most")
+    return [r for _, r in stated]
+
+
+def _assign(brief, lines, records, given) -> dict[int, str]:
+    """The cart line holding each requested item (by item index): as the coordinator chose it,
+    or else matched by kind, preferring a line that meets the item's requirements."""
+    if isinstance(given, dict):
+        owner = {}
+        for key, ident in given.items():
+            if str(key).isdigit() and int(key) < len(brief.items) and ident in lines:
+                owner[int(key)] = ident
+        return owner
+    owner, used = {}, set()
+    for number, item in enumerate(brief.items):
+        needs = [n for n in item.needs() if n not in brief.lookups]
+        kind = [
+            i
+            for i in lines
+            if i in records and same_kind(item.name, item.shelf, records[i].category)
+        ]
+        ranked = sorted(
+            kind,
+            key=lambda i: (i in used, not all(check_need(n, records[i]).met for n in needs)),
+        )
+        if ranked:
+            owner[number] = ranked[0]
+            used.add(ranked[0])
+    return owner
 
 
 class ReviewAgent(Agent):
@@ -41,7 +77,8 @@ class ReviewAgent(Agent):
         brief = Brief.from_dict(payload["brief"])
         lines = {str(k): int(v) for k, v in payload["lines"].items()}
         records = {r["id"]: Listing.from_dict(r) for r in payload["records"]}
-        problems, ruled_out = self._rule_problems(brief, lines, records)
+        owner = _assign(brief, lines, records, payload.get("assign"))
+        problems, ruled_out = self._rule_problems(brief, lines, records, owner)
         opinion, better = "none", []
         if self.model and not problems:
             opinion, extra, better = self._model_opinion(brief, lines, records)
@@ -55,42 +92,47 @@ class ReviewAgent(Agent):
             "model_review": opinion,
         }
 
-    def _rule_problems(self, brief, lines, records) -> tuple[list[str], list[str]]:
+    def _rule_problems(self, brief, lines, records, owner) -> tuple[list[str], list[str]]:
         problems: list[str] = []
         ruled_out: list[str] = []
         unverified = set(brief.lookups)
+        held: dict[str, list[Item]] = {}
+        for number, ident in owner.items():
+            held.setdefault(ident, []).append(brief.items[number])
         for ident, quantity in lines.items():
             record = records.get(ident)
             if record is None:
                 problems.append(f"{ident} has no record to check")
                 continue
-            owners = [i for i in brief.items if same_kind(i.name, i.shelf, record.category)]
-            if not owners:
-                problems.append(f"{ident} is not a kind the shopper asked for")
-                ruled_out.append(ident)
+            items = held.get(ident, [])
+            if not items:
+                if any(same_kind(i.name, i.shelf, record.category) for i in brief.items):
+                    problems.append(f"{ident} is not needed for any requested item")
+                else:
+                    problems.append(f"{ident} is not a kind the shopper asked for")
+                    ruled_out.append(ident)
                 continue
-            item = owners[0]
-            if quantity != item.quantity:
-                problems.append(f"{ident} is held at {quantity}, {item.name} wants {item.quantity}")
+            wanted = sum(item.quantity for item in items)
+            if quantity != wanted:
+                names = " and ".join(item.name for item in items)
+                problems.append(f"{ident} is held at {quantity}, {names} wants {wanted}")
             if not record.in_stock:
                 problems.append(f"{ident} is sold out")
                 ruled_out.append(ident)
-            for need in item.needs():
-                if need in unverified:
-                    continue
-                verdict = check_need(need, record)
-                if verdict.met is not True:
-                    problems.append(f"{ident} does not meet {need}: {verdict.reason}")
-                    ruled_out.append(ident)
-        for item in brief.items:
-            if not any(
-                i in records and same_kind(item.name, item.shelf, records[i].category)
-                for i in lines
-            ):
+            for item in items:
+                for need in item.needs():
+                    if need in unverified:
+                        continue
+                    verdict = check_need(need, record)
+                    if verdict.met is not True:
+                        problems.append(f"{ident} does not meet {need}: {verdict.reason}")
+                        ruled_out.append(ident)
+        for number, item in enumerate(brief.items):
+            if number not in owner:
                 problems.append(f"{item.name} has no line in the cart")
         problems += self._budget_problems(brief, lines, records)
-        problems += self._fit_problems(brief, lines, records, ruled_out)
-        problems += self._pick_problems(brief, lines, records, ruled_out)
+        problems += self._fit_problems(brief, owner, records, ruled_out)
+        problems += self._pick_problems(brief, owner, records, ruled_out)
         return problems, list(dict.fromkeys(ruled_out))
 
     @staticmethod
@@ -112,50 +154,52 @@ class ReviewAgent(Agent):
         return []
 
     @staticmethod
-    def _fit_problems(brief, lines, records, ruled_out) -> list[str]:
+    def _fit_problems(brief, owner, records, ruled_out) -> list[str]:
         problems = []
         for pair in brief.fits:
-            part_item = brief.items[pair["item"] - 1]
-            device_item = brief.items[pair["with"] - 1]
-            of_kind = lambda item: [  # noqa: E731
-                records[i]
-                for i in lines
-                if i in records and same_kind(item.name, item.shelf, records[i].category)
-            ]
-            for part in of_kind(part_item):
-                for device in of_kind(device_item):
-                    problem = fit_problem(part, device)
-                    if problem:
-                        problems.append(problem)
-                        ruled_out.append(part.id)
+            part, device = owner.get(pair["item"] - 1), owner.get(pair["with"] - 1)
+            if part not in records or device not in records:
+                continue
+            problem = fit_problem(records[part], records[device])
+            if problem:
+                problems.append(problem)
+                ruled_out.append(part)
         return problems
 
     @staticmethod
-    def _pick_problems(brief, lines, records, ruled_out) -> list[str]:
-        """A cheaper listing that clearly fits every requirement means the cart is wrong."""
+    def _pick_problems(brief, owner, records, ruled_out) -> list[str]:
+        """A cheaper listing that clearly fits every requirement means the cart is wrong, and
+        for a most or least pick, so does a line that does not state the measure."""
+        if brief.pick in ("most", "least"):
+            silent = [
+                i
+                for i in dict.fromkeys(owner.values())
+                if i in records and stated_measure(records[i], brief.pick_measure) is None
+            ]
+            ruled_out += silent
+            return [f"{i} does not state its {brief.pick_measure}" for i in silent]
         if brief.pick != "cheapest":
             return []
         problems = []
         unverified = set(brief.lookups)
-        for ident in lines:
+        for number, ident in owner.items():
             record = records.get(ident)
             if record is None or record.price is None:
                 continue
-            owners = [i for i in brief.items if same_kind(i.name, i.shelf, record.category)]
-            for item in owners[:1]:
-                needs = [n for n in item.needs() if n not in unverified]
-                for other in records.values():
-                    if (
-                        other.id != ident
-                        and other.in_stock
-                        and other.price is not None
-                        and other.price < record.price
-                        and same_kind(item.name, item.shelf, other.category)
-                        and all(check_need(n, other).met is True for n in needs)
-                    ):
-                        problems.append(f"{other.id} also fits and is cheaper than {ident}")
-                        ruled_out.append(ident)
-                        break
+            item = brief.items[number]
+            needs = [n for n in item.needs() if n not in unverified]
+            for other in records.values():
+                if (
+                    other.id != ident
+                    and other.in_stock
+                    and other.price is not None
+                    and other.price < record.price
+                    and same_kind(item.name, item.shelf, other.category)
+                    and all(check_need(n, other).met is True for n in needs)
+                ):
+                    problems.append(f"{other.id} also fits and is cheaper than {ident}")
+                    ruled_out.append(ident)
+                    break
         return problems
 
     def _model_opinion(self, brief, lines, records) -> tuple[str, list[str], list[str]]:
@@ -174,8 +218,8 @@ class ReviewAgent(Agent):
             return "unavailable", [], []
         if got.get("ok") is not False:
             return "passed", [], []
-        problems = [str(p) for p in got.get("problems") or []] or ["the model review failed"]
-        better = [str(b) for b in got.get("better") or [] if str(b) in records]
+        problems = [str(p) for p in listed(got, "problems")] or ["the model review failed"]
+        better = [str(b) for b in listed(got, "better") if str(b) in records]
         return "failed", problems, better
 
     def on_decline(self, payload: dict[str, Any], context) -> dict[str, Any]:
@@ -193,9 +237,11 @@ class ReviewAgent(Agent):
             ]
             mine = [r for r in mine if self._within_budget(brief, item, r)]
             verdicts = {r.id: [check_need(n, r).met for n in needs] for r in mine}
-            good = [r.id for r in mine if all(v is True for v in verdicts[r.id])]
+            good = [r for r in mine if all(v is True for v in verdicts[r.id])]
+            if brief.pick in ("most", "least"):
+                good = _extreme_first(good, brief.pick, brief.pick_measure)
             if good:
-                fits[str(number)] = good[:4]
+                fits[str(number)] = [r.id for r in good[:4]]
             else:
                 missing.append(item.name)
             unread += [r.id for r in mine if not r.opened and None in verdicts[r.id]]

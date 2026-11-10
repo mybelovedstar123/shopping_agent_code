@@ -8,7 +8,7 @@ from typing import Any
 
 from ..domain import PICK_RULES, ROLES, Brief, Item
 from ..fit import words
-from ..models.base import Model, ModelError, ask_json
+from ..models.base import Model, ModelError, ask_json, listed
 from ..prompts import BRIEF, UNMIX
 from ..runtime.agent import Agent
 from ..schema import kinds
@@ -118,33 +118,48 @@ def _spelled_money_to_digits(text: str) -> str:
     return re.sub(pattern, convert, text, flags=re.I)
 
 
-def _money(text: str) -> tuple[float | None, str]:
-    """Find the budget. Returns it and the text without that phrase."""
+PER_ITEM = r"(?:each|apiece|per item|per unit|a piece)"
+
+
+def read_money(text: str) -> tuple[float | None, str, bool]:
+    """Find the budget. Returns it, the text without that phrase, and whether it is per item."""
     text = _spelled_money_to_digits(text)
     limit = (
         r"(?:,?\s*(?:for |of )?(?:nothing over|not over|under|below|less than|at most"
         r"|no more than|up to|within|maximum of"
         r"|max|budget of|budget is|spend(?:ing)?(?: at most)?|cost(?:ing)? (?:at most|under))\s*)"
     )
+    amount = r"(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)"  # "1,200" is one amount
     patterns = (
-        rf"{limit}?\$\s*(\d+(?:\.\d+)?)",
-        rf"{limit}?(\d+(?:\.\d+)?)\s*(?:dollars?|usd|bucks?)\b",
-        r"budget(?: of| is)?\s*(\d+(?:\.\d+)?)",
+        rf"{limit}?\$\s*{amount}",
+        rf"{limit}?{amount}\s*(?:dollars?|usd|bucks?)\b",
+        rf"budget(?: of| is)?\s*{amount}",
     )
     for pattern in patterns:
         match = re.search(pattern, text, re.I)
         if match:
-            return float(match.group(1)), text[: match.start()] + " " + text[match.end() :]
-    return None, text
+            # Only words next to the amount make it a limit per item ("$5 each").
+            each = bool(
+                re.match(rf"\s*{PER_ITEM}\b", text[match.end() :], re.I)
+                or re.search(
+                    rf"\b{PER_ITEM}\s*(?:costing|at|for)?\s*$", text[: match.start()], re.I
+                )
+            )
+            budget = float(match.group(1).replace(",", ""))
+            return budget, text[: match.start()] + " " + text[match.end() :], each
+    return None, text, False
 
 
 def _pick(text: str) -> tuple[str, str]:
     if re.search(r"cheapest|lowest price|least expensive|best price|lowest cost", text, re.I):
         return "cheapest", ""
-    match = re.search(r"\b(most|highest|largest|biggest)\s+([a-z]+(?: [a-z]+)?)", text, re.I)
+    # "at most" and "at least" set limits, not pick rules.
+    match = re.search(
+        r"(?<!at )\b(most|highest|largest|biggest)\s+([a-z]+(?: [a-z]+)?)", text, re.I
+    )
     if match and match.group(2).split()[0].lower() != "expensive":
         return "most", match.group(2)
-    match = re.search(r"\b(least|lowest|smallest|lightest)\s+([a-z]+)", text, re.I)
+    match = re.search(r"(?<!at )\b(least|lowest|smallest|lightest)\s+([a-z]+)", text, re.I)
     if match:
         return "least", "weight" if match.group(1).lower() == "lightest" else match.group(2)
     return "any", ""
@@ -248,14 +263,15 @@ def parse_request(request: str, tools: list[dict[str, Any]]) -> Brief:
     match = re.search(r"\b(?:within|in|at most) (\d+) (?:steps|moves|tool calls)\b", text, re.I)
     if match:
         brief.steps = int(match.group(1))
+        text = text[: match.start()] + text[match.end() :]
 
     if re.search(APPROVAL, text, re.I):
         step = {"step": "get the shopper's approval", "when": "order", "messages": 1}
         brief.process.append(step)
     brief.pick, brief.pick_measure = _pick(text)
-    if re.search(r"\b(each|per item|apiece)\b", text, re.I):
+    brief.budget, text, each = read_money(text)
+    if each:
         brief.budget_scope = "each"
-    brief.budget, text = _money(text)
 
     sentences = [s for s in re.split(r"(?<=[.!?;])\s+", text) if s.strip()]
     wanted = next(
@@ -313,9 +329,9 @@ def brief_from_model(
     """Convert a model's brief, rejecting one that lacks items or a way to buy."""
     names = {tool_name(t) for t in tools}
     raw_roles = data.get("roles") if isinstance(data.get("roles"), dict) else {}
-    roles = {k: v for k, v in raw_roles.items() if k in ROLES and v in names}
+    roles = {k: v for k, v in raw_roles.items() if k in ROLES and isinstance(v, str) and v in names}
     items = []
-    for entry in data.get("items") or []:
+    for entry in listed(data, "items"):
         if isinstance(entry, dict):
             quantity = _count(entry.get("quantity"))
             items.append(
@@ -323,14 +339,14 @@ def brief_from_model(
                     str(entry.get("name") or "the product"),
                     str(entry.get("shelf") or ""),
                     quantity if quantity and quantity > 0 else 1,
-                    [str(m) for m in entry.get("musts") or [] if m],
+                    [str(m) for m in listed(entry, "musts") if m],
                 )
             )
     if not items or not roles.get("buy"):
         return None
     limit = _count(data.get("messages"))
     process = []
-    for entry in data.get("process") or []:
+    for entry in listed(data, "process"):
         if isinstance(entry, dict) and str(entry.get("step") or "").strip():
             when = str(entry.get("when") or "").lower()
             process.append(
@@ -344,8 +360,9 @@ def brief_from_model(
     budget = _number(data.get("budget"))
     fits = [
         {"item": _count(p.get("item")), "with": _count(p.get("with"))}
-        for p in data.get("fits") or []
-        if isinstance(p, dict) and _count(p.get("item")) and _count(p.get("with"))
+        for p in listed(data, "fits")
+        if isinstance(p, dict)
+        and all(1 <= (_count(p.get(k)) or 0) <= len(items) for k in ("item", "with"))
     ]
     return Brief(
         request=request,
@@ -359,9 +376,9 @@ def brief_from_model(
         steps=_count(data.get("steps")),
         process=process,
         quiet_decline=data.get("quiet_decline") is not False,
-        wishes=[str(w) for w in data.get("wishes") or []],
+        wishes=[str(w) for w in listed(data, "wishes")],
         fits=fits,
-        lookups=[str(x) for x in data.get("lookups") or []],
+        lookups=[str(x) for x in listed(data, "lookups")],
         roles=roles,
         buy_args=data["buy_args"] if isinstance(data.get("buy_args"), dict) else {},
         refuse_args=data["refuse_args"] if isinstance(data.get("refuse_args"), dict) else {},
@@ -421,7 +438,7 @@ class RequestAgent(Agent):
             except ModelError:
                 continue
             moved = [
-                m for m in rest if m in [str(x).strip() for x in got.get("describe_other") or []]
+                m for m in rest if m in [str(x).strip() for x in listed(got, "describe_other")]
             ]
             if moved:
                 joined = f"{pointers[0]} (that listing: {'; '.join(moved)})"

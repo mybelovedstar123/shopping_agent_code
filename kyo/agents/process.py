@@ -9,7 +9,7 @@ import json
 import re
 from typing import Any
 
-from ..models.base import Model, ModelError, ask_json
+from ..models.base import Model, ModelError, ask_json, listed
 from ..prompts import GATE
 from ..runtime.agent import Agent
 from ..schema import text_params
@@ -20,14 +20,25 @@ YES = re.compile(
     re.I,
 )
 NO = re.compile(r"\b(no|nope|don'?t|do not|not|stop|cancel|wait|decline|rather not)\b", re.I)
+# Phrases that hold a "no" word but agree, and ones that only say the shopper is indifferent.
+AGREEING = re.compile(
+    r"\b(no problem|not a problem|no worries|why not|no objections?|of course)\b", re.I
+)
+INDIFFERENT = re.compile(r"\b(i )?(don'?t|do not) mind\b", re.I)
 ROUNDS = 3
 
 
 def read_approval(answer: str) -> bool | None:
-    """True for approval, False for refusal, None when the reply says neither."""
-    if NO.search(answer):
+    """True for approval, False for refusal, None when the reply says neither.
+
+    "I don't mind" on its own is not approval: it is what a shopper who never answered
+    is taken to have said.
+    """
+    agrees = bool(AGREEING.search(answer))
+    rest = INDIFFERENT.sub(" ", AGREEING.sub(" ", answer))
+    if NO.search(rest):
         return False
-    return True if YES.search(answer) else None
+    return True if agrees or YES.search(rest) else None
 
 
 class ProcessAgent(Agent):
@@ -128,7 +139,7 @@ class ProcessAgent(Agent):
             if got is None:
                 return None
             hold = str(got.get("hold") or "").strip()
-            needs = [n for n in got.get("needs") or [] if isinstance(n, dict) and n.get("need")]
+            needs = [n for n in listed(got, "needs") if isinstance(n, dict) and n.get("need")]
             if hold or needs:
                 return {
                     "proceed": False,
@@ -142,7 +153,7 @@ class ProcessAgent(Agent):
             if not call:
                 missing = [
                     str(s.get("step"))
-                    for s in got.get("steps") or []
+                    for s in listed(got, "steps")
                     if isinstance(s, dict) and s.get("done") is not True
                 ]
                 return {
@@ -152,6 +163,12 @@ class ProcessAgent(Agent):
                     "not_done": missing,
                 }
             name, args = str(call.get("tool") or ""), call.get("args") or {}
+            if not isinstance(args, dict):
+                return None
+            allowed = {t["function"]["name"] for t in payload.get("tools") or []}
+            if name not in allowed | {payload.get("ask_tool")}:
+                context.note(f"the model asked for {name or 'no tool'}, which steps may not use")
+                return None
             reply = context.request("gateway", "call", {"name": name, "args": args})
             if not reply.get("ok"):
                 return None

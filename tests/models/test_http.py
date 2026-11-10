@@ -96,7 +96,14 @@ def test_connection_failure_is_a_model_error():
 
 
 @pytest.mark.parametrize(
-    "body", [{"choices": []}, {"choices": [{"message": {"content": ""}}]}, {"error": "x"}]
+    "body",
+    [
+        {"choices": []},
+        {"choices": [{"message": {"content": ""}}]},
+        {"error": "x"},
+        {"choices": [{"message": None}]},
+        {"choices": [{"message": "hello"}]},
+    ],
 )
 def test_unusable_replies_are_model_errors(endpoint, body):
     url, queue, _ = endpoint

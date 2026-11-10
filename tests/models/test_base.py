@@ -47,3 +47,12 @@ def test_scripted_model_can_raise_and_return_full_replies():
     with pytest.raises(ModelError):
         model.complete([{"content": "x"}])
     assert model.complete([{"content": "x"}]).tool_calls == calls
+
+
+def test_listed_and_item_index_tolerate_malformed_values():
+    from kyo.models.base import item_index, listed
+
+    assert listed({"a": [1]}, "a") == [1] and listed({"a": "x"}, "a") == ["x"]
+    assert listed({"a": 3}, "a") == [] and listed({}, "a") == []
+    assert item_index("2", 3) == 1 and item_index(9, 3) == 2 and item_index(0, 3) == 0
+    assert item_index("first", 3, default=1) == 1 and item_index(None, 3) == 0
