@@ -400,3 +400,20 @@ def test_a_most_pick_declines_when_no_listing_states_the_measure():
         [mug("A", colour="blue"), mug("B", colour="red")],
     )
     assert result["outcome"] == "declined" and store.order is None
+
+
+class RepricedAtCheckoutStore(ScenarioStore):
+    """The first checkout finds a carted line's price raised, and refuses the order."""
+
+    def _checkout(self, args):
+        if self.products["L1"].price != 35.0:
+            self.products["L1"].price = 35.0
+            return {"accepted": False, "note": "The cart has changed since it was approved."}
+        return super()._checkout(args)
+
+
+def test_a_price_rise_at_checkout_switches_to_another_fit_within_budget():
+    store = RepricedAtCheckoutStore([lamp("L1", 26.98), lamp("L2", 21.98)])
+    result = run_team("Buy a red desk lamp under $30. Do not ask me anything.", store)
+    assert result["outcome"] == "purchased" and store.order == {"L2": 1}
+    assert result["total"] == 21.98

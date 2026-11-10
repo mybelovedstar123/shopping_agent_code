@@ -41,6 +41,7 @@ class _Episode:
         self.model_reviews: list[str] = []
         self.buys_refused = 0
         self.prices_stale = False
+        self.moved: list[str] = []
 
     # ------------------------------------------------------------ helpers
 
@@ -341,12 +342,13 @@ class _Episode:
         due = sum(
             int(s.get("messages") or 0) for s in self.brief.process if s.get("when") == "order"
         )
+        self.moved = []
         if tool and self.left() > len(lines) + due:
-            self.ask(
+            self.moved = self.ask(
                 "catalog",
                 "refresh",
                 {"tool": tool, "schema": self.schemas[tool], "ids": list(lines)},
-            )
+            )["changed"]
             self.prices_stale = False
         records = self.ask("catalog", "records")["records"]
         verdict = self.ask(
@@ -361,7 +363,11 @@ class _Episode:
         return verdict
 
     def handle_problems(self, lines: dict[str, int], verdict: dict[str, Any]) -> bool:
-        """Rule out what the review faulted. False when nothing can be changed."""
+        """Rule out what the review faulted. False when nothing can be changed.
+
+        A line whose price or stock just changed is worth choosing again from, since the
+        choice was made on the old figures.
+        """
         out = set(verdict.get("ruled_out") or [])
         better = verdict.get("better") or []
         if better:
@@ -370,7 +376,7 @@ class _Episode:
             out = set(lines)
         new = out - self.excluded
         self.excluded |= out
-        return bool(new)
+        return bool(new or self.moved)
 
     def cart_summary(self, lines: dict[str, int]) -> dict[str, Any]:
         records = self.ask("catalog", "records", {"ids": list(lines)})["records"]
