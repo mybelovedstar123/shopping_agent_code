@@ -258,6 +258,7 @@ def parse_request(request: str, tools: list[dict[str, Any]]) -> Brief:
     match = re.search(r"\b(?:within|in|at most) (\d+) (?:steps|moves|tool calls)\b", text, re.I)
     if match:
         brief.steps = int(match.group(1))
+        text = text[: match.start()] + text[match.end() :]
 
     if re.search(APPROVAL, text, re.I):
         step = {"step": "get the shopper's approval", "when": "order", "messages": 1}

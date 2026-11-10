@@ -73,7 +73,7 @@ class _Episode:
         }
         read = self.ask("request", "read", {"request": request, "tools": self.tools})
         self.brief = Brief.from_dict(read["brief"])
-        if self.brief.steps and self.brief.steps >= 10:
+        if self.brief.steps:
             self.ask("gateway", "limit_steps", {"steps": self.brief.steps})
         if not self.tool("buy"):
             return self.result("unfinished", "this store has no way to check out")

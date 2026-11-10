@@ -379,3 +379,16 @@ def test_one_store_failure_does_not_end_the_run():
     store = FlakyStore([lamp("L1")])
     result = run_team("Buy a red desk lamp. Do not ask me anything.", store)
     assert result["outcome"] == "purchased" and store.order == {"L1": 1}
+
+
+def test_a_request_with_a_step_limit_can_still_buy():
+    result, store = shop(
+        "Buy a red desk lamp within 12 steps. Do not ask me anything.", [lamp("L1")]
+    )
+    assert result["outcome"] == "purchased" and store.order == {"L1": 1}
+
+
+def test_a_small_step_limit_in_the_request_is_kept():
+    lamps = [lamp(f"L{n}", colour="blue") for n in range(8)] + [lamp("L8")]
+    _, store = shop("Buy a red desk lamp in at most 6 steps. Do not ask me anything.", lamps)
+    assert store.steps <= 6

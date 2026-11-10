@@ -141,6 +141,12 @@ def test_step_limit():
     assert parse("Buy a mug in 12 steps.").steps == 12
 
 
+def test_step_limit_is_not_part_of_the_product():
+    brief = parse("Buy a red desk lamp within 12 steps.")
+    assert brief.steps == 12 and brief.items[0].name == "desk lamp"
+    assert brief.items[0].musts == ["colour: red"]
+
+
 def test_an_unreadable_request_still_gives_one_item():
     assert len(parse("Hello there.").items) == 1
 
