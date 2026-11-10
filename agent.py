@@ -24,6 +24,7 @@ TABLE_KEYS = 18
 CHEAPER_SHOWN = 4
 CRASH_TURNS = 3
 SHORT_KEEP = 8
+SET_SHOWN = 2
 STOCK_OUT = '^(?:no|none|false|0|n)$|out[ _-]?of[ _-]?stock|sold[ _-]?out|unavailable|not[ _-]?available'
 TITLE_CHARS = 200
 TEXT_CHARS = 3000
@@ -73,29 +74,54 @@ GUARD_GAP = 0.34
 NOT_PROPERTY = '\\b(?:options?|variants?|models?|sku|ids?|codes?|asin|upc|ean|barcodes?|warrant\\w*|video|url|links?|images?|photos?|condition)\\b'
 CATCH_ALL = '^(?!.*\\b(?:types?|styles?|kinds?|shapes?)\\b).*\\b(?:features?|functions?|highlights?|specs?|specifications?|descriptions?|includ\\w*|accessor\\w*|extras?|misc\\w*)\\b'
 WIDEN_EACH = 6
-FIT_CODE = '[A-Z][A-Za-z]{0,5} ?\\d{3,6}'
-PART_CODE = '[A-Z]{1,4}\\d{3,6}'
+FIT_CODE = '[A-Z][A-Za-z]{0,5}[ -]?(?:\\d{3,6}|\\d{1,5}[xX]{1,3})'
+PART_CODE = '[A-Z]{1,5}\\d{0,3}-?\\d{3,7}'
 VALUE_ROOM = 12  # steps beyond the finish before a value search runs at all (race 16: limit 35, answers at about step 15)
 VALUE_KEEP = 8  # steps a value search leaves beyond the finish, for opening and buying what it found
+LINK_SEARCHES = 3  # series searched per item in a decline hunt (race 16: up to 9 series)
+LINK_ROWS = 3  # rows of one item carrying a series code before the codes count as a system (race 16 covers: nearly every row)
+LINK_FAMILIES = 12  # more distinct series than this are model numbers, not a system (race 16: 9)
 
 def _codes(text: Any) -> list[str]:
-    return [re.sub('\\s+', ' ', c).strip().lower() for c in re.findall('\\b' + FIT_CODE + '\\b', str(text or ''))]
+    found = re.findall('\\b' + FIT_CODE + '\\b', str(text or ''))
+    return [re.sub('[\\s-]+', ' ', c).strip().lower() for c in found if not re.fullmatch('[A-Z][a-z]+ (?:19|20)\\d\\d', c)]
+
+def _code_hit(pattern: str, code: str) -> bool:
+    """Whether a code a part names covers a device's code: the same letters and digits, or a series written with trailing
+    x's ("abc12xx" covers "abc1234"); spaces and hyphens do not count."""
+    wide, plain = (re.sub('[\\s-]+', '', pattern), re.sub('[\\s-]+', '', code))
+    stem = wide.rstrip('x')
+    if stem != wide and stem[-1:].isdigit():
+        return plain.startswith(stem) and len(plain) == len(wide)
+    return wide == plain
 
 def _fit_marks(text: Any) -> dict[str, Any]:
     text = str(text or '')
     own = re.search('[\\[(]\\s*(?:part\\s+)?(' + PART_CODE + ')\\s*[\\])]', text, re.I)
     codes: list[str] = []
-    for hit in re.finditer('\\bmodel\\s*(?:no\\.?|number|#)\\s*[:.]?\\s*(' + FIT_CODE + ')\\b', text, re.I):
+    for hit in re.finditer('\\bmodel\\s*(?:no\\.?|number|#)?\\s*[:.]?\\s*(?!(?:no|number)\\b)(' + FIT_CODE + ')\\b', text, re.I):
         codes += _codes(hit.group(1))
     for hit in re.finditer('\\b(?:also sold as|also known as|sold also as)\\s+([^.;]+)', text, re.I):
         codes += _codes(hit.group(1))
     works: list[str] = []
+    bars: list[str] = []
     for hit in re.finditer('\\b(?<!not )(?<!never )(?:works with|compatible with|fits)\\s*:?\\s+([^.;]+)', text, re.I):
         if not re.search('\\bpart\\s+' + PART_CODE + '\\s+also\\s+$', text[max(0, hit.start() - 40):hit.start()], re.I):
-            works += _codes(hit.group(1))
+            cut = re.split('(?i)\\b(?:except|excluding|but not)\\b', hit.group(1), maxsplit=1)
+            works += _codes(cut[0])
+            bars += _codes(cut[1]) if len(cut) > 1 else []
     also = [(hit.group(1).upper(), _codes(hit.group(2))) for hit in re.finditer('\\bpart\\s+(' + PART_CODE + ')\\s+also fits\\s*:?\\s*([^.;]+)', text, re.I)]
     more = re.search('\\b(?:more|details|see|read)\\s+(?:on|at|under|about)?\\s*(?:the\\s+)?part\\s+(' + PART_CODE + ')', text, re.I)
-    return {'own': own.group(1).upper() if own else '', 'codes': codes, 'works': works, 'also': also, 'more': more.group(1).upper() if more else ''}
+    fam, named = _series_marks(text)
+    return {'own': own.group(1).upper() if own else '', 'codes': codes, 'works': works, 'bars': bars, 'also': also, 'more': more.group(1).upper() if more else '', 'fam': fam, 'named': named}
+
+def _series_marks(text: str) -> tuple[list[str], list[str]]:
+    """The series a record's own codes start with ("AB1" of "AB1-2345") and the bare series-like words it names outside a clause that
+    excludes them. Which bare words are series is decided against the codes other records carry (Kyo.link_system)."""
+    fam = {hit.upper() for hit in re.findall('\\b([A-Za-z]{1,5}\\d{1,3})-\\d{2,7}\\b', text)}
+    rest = re.sub('\\b[A-Za-z]{1,5}\\d{1,3}-\\d{2,7}\\b', ' ', text)
+    rest = re.sub('(?i)\\b(?:except|excluding|but not|not for|not compatible with|does not (?:fit|take))\\b[^.;]*', ' ', rest)
+    return sorted(fam), sorted({hit.upper() for hit in re.findall('\\b[A-Za-z]{1,5}\\d{1,3}\\b', rest)})
 PAIR_MARKS = (': ', ' = ', '=', ' -> ', ' - ')
 FIELD_MARKS = (' | ', '\n', ' || ', ' ; ', '; ', '\t', ' // ', ' · ', ' • ', '|', ';', ', ')
 FIELD_NAME = "[A-Za-z][A-Za-z0-9_ ./&'()-]{0,38}"
@@ -780,6 +806,7 @@ class Kyo:
         self.verdicts: dict[str, bool] = {}
         self.confirmed: str | None = None
         self.completed = False
+        self.link_tried: set[str] = set()
         self.capped: set[tuple[str, float]] = set()
         self.factless: set[tuple[str, str]] = set()
         self.id_key: str | None = None
@@ -791,6 +818,7 @@ class Kyo:
         self.chat: list[dict[str, Any]] = []
         self.opened: set[str] = set()
         self.views: dict[str, set[str]] = {}
+        self.fit_cached: tuple[Any, dict[str, Any]] | None = None
         self.refs: list[tuple[int, str]] = []
         self.ref_values: dict[str, str] = {}
         self.trails = 0
@@ -1698,6 +1726,33 @@ class Kyo:
         if texts:
             self.trace.append({'kind': 'fill_facts', 'n': len(texts)})
         return texts
+
+    def show_links(self, ids: list[str], keep: int) -> None:
+        """Run the part code a cart line sends the reader to through the search, once per code, and open
+        the page it finds when steps allow; the result feeds the ledger, not the model. Multi-line carts only."""
+        plan = self.value_template()
+        if not plan or (len(self.items) < 2 and len(ids) < 2):
+            return
+        tool, base, field = plan
+        for ident in ids:
+            marks = self.fit_index()['marks']
+            code = (marks.get(ident) or {}).get('more')
+            if not code or code in self.link_tried or any((mark.get('own') == code for mark in marks.values())):
+                continue
+            if self.left() <= keep or self.finished or self.rushed():
+                return
+            self.link_tried.add(code)
+            faults: list[str] = []
+            args = _shape({**base, field: code}, self.schemas.get(tool), 'args', faults)
+            if faults:
+                return
+            reply = self.act(tool, args)
+            if reply is None:
+                return
+            self.observe(tool, reply.get('observation'))
+            self.trace.append({'kind': 'show_link', 'line': ident, 'code': code})
+            marks = self.fit_index()['marks']
+            self.fill_facts([i for i, mark in marks.items() if mark.get('own') == code], max(keep, self.tail() + 6))
 
     def cap_template(self) -> tuple[str, dict[str, Any], str, str] | None:
         """The listing tool that takes a shelf and a maximum price, with the mode it needs: the mode an earlier listing by
@@ -2760,6 +2815,9 @@ class Kyo:
         return '\n'.join(lines)
 
     def fit_index(self) -> dict[str, Any]:
+        state = (len(self.seen_order), len(self.full), sum((len(v) for v in self.views.values())))
+        if self.fit_cached and self.fit_cached[0] == state:
+            return self.fit_cached[1]
         marks: dict[str, dict[str, Any]] = {}
         notes: dict[str, set[str]] = {}
         for ident in self.seen_order:
@@ -2769,7 +2827,8 @@ class Kyo:
             marks[ident] = _fit_marks(text)
             for part, codes in marks[ident]['also']:
                 notes.setdefault(part, set()).update(codes)
-        return {'marks': marks, 'notes': notes}
+        self.fit_cached = (state, {'marks': marks, 'notes': notes})
+        return self.fit_cached[1]
 
     def fit_set(self, ident: str, index: dict[str, Any]) -> set[str]:
         mark = index['marks'].get(ident) or {}
@@ -2783,6 +2842,63 @@ class Kyo:
         item = self.items[number - 1]
         return [i for i in self.seen_order if cat_key and self.owns(item, str((self.rows.get(i) or {}).get(cat_key) or ''))]
 
+    def link_system(self, part: int, main: int, index: dict[str, Any]) -> tuple[int, int, set[str]] | None:
+        """(item carrying series codes, item naming them, the series) of two items bound to each other, or None when the rows read so far
+        show no such system: most rows of one item carry a code of few series, and rows of the other name at least one of those series."""
+        marks = index['marks']
+        for carrier, namer in ((part, main), (main, part)):
+            rows = self.item_ids(carrier)
+            tagged = [i for i in rows if (marks.get(i) or {}).get('fam')]
+            families = {f for i in tagged for f in marks[i]['fam']}
+            if len(tagged) < LINK_ROWS or 2 * len(tagged) < len(rows) or len(families) > LINK_FAMILIES:
+                continue
+            if any((f in families for i in self.item_ids(namer) for f in (marks.get(i) or {}).get('named') or [])):
+                return (carrier, namer, families)
+        return None
+
+    def link_holds(self, carried: str, namer: str, families: set[str], index: dict[str, Any]) -> bool | None:
+        """Whether a row's own series is one the other row names; None when either row says nothing about it."""
+        own = set((index['marks'].get(carried) or {}).get('fam') or []) & families
+        named = set((index['marks'].get(namer) or {}).get('named') or []) & families
+        return bool(own & named) if own and named else None
+
+    def link_faults(self, part: int, main: int, device: str, lines: list[str], index: dict[str, Any]) -> list[str]:
+        system = self.link_system(part, main, index)
+        if not system:
+            return []
+        carrier, _, families = system
+        marks = index['marks']
+        faults = []
+        for line in lines:
+            carried, namer = (line, device) if carrier == part else (device, line)
+            if self.link_holds(carried, namer, families, index) is not False:
+                continue
+            wanted = set(marks[namer].get('named') or []) & families
+            good = [i for i in self.item_ids(carrier) if set(marks[i].get('fam') or []) & wanted and not self.sold_out(i) and i != carried][:4]
+            faults.append(f"{carried} is of series {', '.join(sorted(set(marks[carried].get('fam') or []) & families))}, while {namer} takes {', '.join(sorted(wanted))}" + (f"; seen listings of that series: {', '.join(good)}" if good else f"; search that series with the item's words, or take another {self.items[main - 1].name} whose series the wanted lines carry"))
+        return faults
+
+    def series_for(self, number: int) -> list[str]:
+        """The series to search a linked item by, most useful first: those the cart's lines of the linked items hold, then those most rows of the
+        linked items carry or name. [] when the item is linked by no series system."""
+        index = self.fit_index()
+        marks = index['marks']
+        counts: dict[str, int] = {}
+        held: list[str] = []
+        cart = self.cart_ids()
+        for part, main in self.bound:
+            system = self.link_system(part, main, index) if number in (part, main) else None
+            if not system:
+                continue
+            for member in (part, main):
+                for i in self.item_ids(member):
+                    tags = set((marks.get(i) or {}).get('fam') or []) | set((marks.get(i) or {}).get('named') or [])
+                    for family in tags & system[2]:
+                        counts[family] = counts.get(family, 0) + 1
+                        if i in cart and family not in held:
+                            held.append(family)
+        return (held + [f for f in sorted(counts, key=lambda f: (-counts[f], f)) if f not in held])[:LINK_SEARCHES]
+
     def fit_faults(self) -> list[str]:
         if not self.bound:
             return []
@@ -2794,13 +2910,19 @@ class Kyo:
             parts = [i for i in cart if i in self.item_ids(part)]
             if len(devices) != 1 or not parts:
                 continue
+            linked = self.link_faults(part, main, devices[0], parts, index)
+            if linked:
+                faults += linked
+                continue
             codes = set(index['marks'].get(devices[0], {}).get('codes') or [])
             if not codes:
                 continue
+            barred = lambda i: set(index['marks'].get(i, {}).get('bars') or [])
+            covers = lambda i: any((_code_hit(p, c) for p in self.fit_set(i, index) for c in codes)) and not any((_code_hit(p, c) for p in barred(i) for c in codes))
             for line in parts:
                 fits = self.fit_set(line, index)
-                if fits and (not fits & codes):
-                    good = [i for i in self.item_ids(part) if self.fit_set(i, index) & codes and (not self.sold_out(i)) and (i not in cart)][:4]
+                if fits and (not covers(line)):
+                    good = [i for i in self.item_ids(part) if covers(i) and (not self.sold_out(i)) and (i not in cart)][:4]
                     faults.append(f"{line} ({self.items[part - 1].name}) works with {', '.join(sorted(fits)[:4])}, not with {devices[0]} ({', '.join(sorted(codes))})" + (f"; seen parts of that kind that work with it: {', '.join(good)}" if good else '; no seen part of that kind works with it, so look for one or switch the device: ' + self.fit_plan(short=True)))
         return faults
 
@@ -2819,14 +2941,52 @@ class Kyo:
                     for code in self.fit_set(i, index):
                         tally.setdefault(code, {}).setdefault(p, 0)
                         tally[code][p] += 1
-            ranked = sorted(tally.items(), key=lambda kv: (-len(kv[1]), -sum(kv[1].values())))[:4]
-            devices = {code: [i for i in self.item_ids(main) if code in (index['marks'].get(i, {}).get('codes') or [])][:2] for code, _ in ranked}
+            for p in parts:
+                system = self.link_system(p, main, index)
+                for i in self.item_ids(p) if system and system[0] == p else []:
+                    for code in set((index['marks'].get(i) or {}).get('fam') or []) & system[2] if not self.sold_out(i) else ():
+                        tally.setdefault(code, {}).setdefault(p, 0)
+                        tally[code][p] += 1
+            ranked = sorted(tally.items(), key=lambda kv: (-len(kv[1]), -sum(kv[1].values())))[:6]
+            devices = {code: [i for i in self.item_ids(main) if code in ((index['marks'].get(i) or {}).get('named') or []) or any((_code_hit(code, c) for c in index['marks'].get(i, {}).get('codes') or []))][:2] for code, _ in ranked}
             text = '; '.join((f'{code}: ' + ', '.join((f'{n} {self.items[p - 1].name}' for p, n in sorted(per.items()))) + (f" (device seen: {', '.join(devices[code])})" if devices[code] else ' (device not seen yet)') for code, per in ranked))
             if text:
                 lines.append(f"codes the {self.items[main - 1].name} candidates' parts name -> {text}")
+            sets = self.cheapest_sets(main, parts, index) if self.brief.get('pick') == 'cheapest' else ''
+            if sets:
+                lines.append(sets)
         if not lines:
             return ''
-        return ' | '.join(lines) if short else "[fit plan: a device fits a part when the part's text names the device's model code or another name it is sold as; codes are not searchable, so list the device's category and read the codes on its rows] " + ' | '.join(lines)
+        return ' | '.join(lines) if short else "[fit plan: a device fits a part when the part's text names the device's model code or another name it is sold as, or when the device's text names the series of the part's code; try one search of a code or series with the item's words, and if it finds nothing list the device's category and read the codes on its rows] " + ' | '.join(lines)
+
+    @_soft('')
+    def cheapest_sets(self, main: int, parts: list[int], index: dict[str, Any]) -> str:
+        """The lowest totals of one device of the item with one part of each bound item its codes fit, among buyable rows
+        seen, requirements not checked: the pick counts the whole order, not each line on its own."""
+        options = []
+        systems = {part: self.link_system(part, main, index) for part in parts}
+        shelves = {part: sorted(((self.price_of(i), i, self.fit_set(i, index), index['marks'].get(i, {}).get('bars') or []) for i in self.item_ids(part) if self.price_of(i) is not None and self.buyable(i)), key=lambda o: (o[0], o[1])) for part in parts}
+        for device in self.item_ids(main):
+            codes = index['marks'].get(device, {}).get('codes') or []
+            price = self.price_of(device)
+            if not (codes or (index['marks'].get(device, {}).get('named'))) or price is None or not self.buyable(device):
+                continue
+            total = price * self.items[main - 1].qty
+            picks = [device]
+            for part in parts:
+                system = systems[part]
+                fitting = next((i for _, i, fits, bars in shelves[part] if (any((_code_hit(p, c) for p in fits for c in codes)) and not any((_code_hit(p, c) for p in bars for c in codes))) or (system and system[0] == part and self.link_holds(i, device, system[2], index) is True)), None)
+                if not fitting:
+                    picks = []
+                    break
+                picks.append(fitting)
+                total += (self.price_of(fitting) or 0.0) * self.items[part - 1].qty
+            if picks:
+                options.append((total, picks))
+        options.sort(key=lambda o: o[0])
+        if not options:
+            return ''
+        return 'lowest whole sets seen, requirements not yet checked: ' + '; '.join((f"{' + '.join(p)} = {t:g}" for t, p in options[:SET_SHOWN]))
 
     def line_faults(self) -> list[str]:
         cat_key = self.category_key()
@@ -3314,6 +3474,7 @@ class Kyo:
         if not calls or len(calls) + 1 > self.left():
             return ''
         self.fill_facts(list(lines), len(calls) + 3)
+        self.show_links(list(lines), len(calls) + 3)
         self.check_cart(list(lines), SPEND_HARD)
         if not self.verdicts.get(self.check_key(list(lines))):
             return ''
@@ -3683,7 +3844,10 @@ class Kyo:
                         self.trace.append({'kind': 'line_hold', 'faults': faults[:6]})
                         out.append((cid, 'Not run yet (no step used). The cart does not match the request yet: ' + '; '.join(faults[:6]) + ". Fix those lines (the cart tool's own way to add or take off units), then check out.\nCart now: " + self.cart_text()))
                         continue
-                    read = self.fill_facts(self.cart_ids(), self.tail() + 3) + self.cheaper_rows()
+                    lines = self.cart_ids()
+                    read = self.fill_facts(lines, self.tail() + (1 if len(lines) >= 2 else 3))
+                    self.show_links(lines, self.tail() + 1)
+                    read += self.cheaper_rows()
                     verdict = self.check_cart()
                     if verdict:
                         seen = "Kyo read these listings' attributes for the check (one step each):\n" + '\n'.join(read) + '\n' if read else ''
@@ -3828,6 +3992,10 @@ class Kyo:
             swap = self.swap_hint()
             if swap:
                 text += '\n' + swap
+            if name == self.roles.get('cart') and self.bound and not self.finished:
+                misfit = self.fit_faults()
+                if misfit:
+                    text += '\n[Kyo] These lines do not work together yet: ' + '; '.join(misfit)
             if self.queued:
                 text += "\n[notes seen on Kyo's own calls] " + ' | '.join(self.queued)
                 self.queued = []
