@@ -6,6 +6,9 @@ services:
     environment:
       # Set to 1 when serving over HTTPS.
       KYO_SECURE_COOKIES: "${KYO_SECURE_COOKIES:-0}"
+      # Set to 0 to start without the sample catalog.
+      KYO_SEED: "${KYO_SEED:-1}"
+      KYO_LOG_LEVEL: "${KYO_LOG_LEVEL:-INFO}"
       # Optional: add a model's judgement to the agents. Leave blank to use rules alone.
       KYO_MODEL_BASE_URL: "${KYO_MODEL_BASE_URL:-}"
       KYO_MODEL_NAME: "${KYO_MODEL_NAME:-}"
