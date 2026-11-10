@@ -42,6 +42,15 @@ def perform(agent, answers, stage="order", steps=(APPROVAL,), cart=CART):
         ("No, too expensive", False),
         ("Please don't", False),
         ("What colour is it?", None),
+        ("Yes, no problem.", True),
+        ("Sure, why not.", True),
+        ("Okay, I don't mind.", True),
+        ("Not a problem, go ahead.", True),
+        ("No problem.", True),
+        ("I don't mind.", None),
+        ("No, thanks.", False),
+        ("No problem, but don't buy it yet.", False),
+        ("Not now, wait until Friday.", False),
     ],
 )
 def test_read_approval(answer, expected):

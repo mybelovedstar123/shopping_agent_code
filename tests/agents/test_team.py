@@ -417,3 +417,12 @@ def test_a_price_rise_at_checkout_switches_to_another_fit_within_budget():
     result = run_team("Buy a red desk lamp under $30. Do not ask me anything.", store)
     assert result["outcome"] == "purchased" and store.order == {"L2": 1}
     assert result["total"] == 21.98
+
+
+def test_an_approval_worded_with_no_problem_is_approval():
+    _, store = shop(
+        "Buy a red desk lamp. Do not ask me anything. Get my approval before ordering.",
+        [lamp("L1")],
+        answers={"May I place": "Yes, no problem."},
+    )
+    assert store.order == {"L1": 1}
