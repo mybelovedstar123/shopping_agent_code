@@ -4541,6 +4541,14 @@ class Kyo:
             return False
         return any((isinstance(s, dict) and 'integer' in _kinds(s) and (s.get('minimum') == 0) for s in props.values()))
 
+    def whole_removal(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+        """A removal of a held line sent without a count names the units held, since the store would take off only one."""
+        spec = self.schemas.get(name, {}).get('properties') or {}
+        count = next((k for k, v in spec.items() if isinstance(v, dict) and 'integer' in _kinds(v)), None)
+        removal = any((isinstance((spec.get(k) or {}).get('enum'), list) and v in spec[k]['enum'][1:] for k, v in args.items()))
+        ident = next((v for v in args.values() if isinstance(v, str) and v in self.cart_lines), None)
+        return {**args, count: min(self.cart_lines[ident], spec[count].get('maximum', self.cart_lines[ident]))} if count and removal and ident and count not in args else args
+
     def note_cart(self, name: str, args: dict[str, Any]) -> None:
         self.cart_touched = True
         self.cart_at = self.step
@@ -4576,7 +4584,7 @@ class Kyo:
         for ident, count in lines:
             have = self.cart_lines.get(ident, 0)
             if removal:
-                have = have - count if count else 0
+                have = have - (count or 1) if any(('integer' in _kinds(v) for v in spec.values() if isinstance(v, dict))) else have - count if count else 0
             elif sets:
                 have = count if count is not None else 1
             else:
@@ -4677,6 +4685,8 @@ class Kyo:
             if wrong:
                 out.append((cid, 'Not run (no step used): ' + wrong + '.'))
                 continue
+            if name == self.roles.get('cart'):
+                args = self.whole_removal(name, args)
             trimmed = ''
             many = self.compare_target() if name == self.roles.get('compare') else None
             if many and isinstance(args.get(many), list) and (len(args[many]) > self.compare_room()) and self.compare_bad:
