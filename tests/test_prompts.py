@@ -8,7 +8,13 @@ NAMES = "GUIDE BRIEF PLAN HEAR NOTE CHECK READING AUDIT UNMIX TRAIL GATE SWAP SH
 # Prompts the baseline agent has revised since the team copied them at version 1.0.0. The revisions describe
 # behaviour of agent.py that the team does not have, so the team keeps its copy of these.
 REVISED_IN_BASELINE = {
+    "AUDIT",
     "BRIEF",
+    "CHECK",
+    "GUIDE",
+    "HEAR",
+    "READING",
+    "SWAP",
     "TRAIL",
 }
 

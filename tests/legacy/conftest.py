@@ -53,6 +53,7 @@ class Harness:
         self.turns = list(turns)
         self.store = store or self.default_store
         self.store_calls = []
+        self.store_actions = []
         self.tool_results = []
 
     @staticmethod
@@ -85,6 +86,7 @@ class Harness:
 
     def env(self, path, body):
         self.store_calls.append(body["action"]["name"])
+        self.store_actions.append((body["action"]["name"], body["action"].get("args")))
         reply = self.store(body)
         if isinstance(reply, SimpleNamespace):
             return reply
