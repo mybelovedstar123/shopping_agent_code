@@ -107,6 +107,17 @@ def end_session(session: Session, token: str | None) -> None:
             login.revoked = True
 
 
+def lock_user(session: Session, user_id: int) -> None:
+    """Take a write lock on a user until the transaction ends, so that changes to what the user
+    owns happen one at a time. Any database blocks a second writer to the same row."""
+    session.execute(
+        update(User)
+        .where(User.id == user_id)
+        .values(name=User.name)
+        .execution_options(synchronize_session=False)
+    )
+
+
 def end_all_sessions(session: Session, user_id: int) -> None:
     session.execute(
         update(LoginSession).where(LoginSession.user_id == user_id).values(revoked=True)

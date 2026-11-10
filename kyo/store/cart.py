@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
+from .accounts import lock_user
 from .catalog import get_product, to_dollars
 from .models import CartLine, Product
 
@@ -26,6 +27,13 @@ def _lines(session: Session, user_id: int, run_id: int | None) -> list[CartLine]
         .order_by(CartLine.id)
     )
     return list(session.scalars(statement))
+
+
+def _lock_cart(session: Session, user_id: int) -> None:
+    """Call before reading a cart to change it. Otherwise two requests adding one product at once
+    could both find no line, and the second insert would fail. The second now waits, then finds
+    the first's line."""
+    lock_user(session, user_id)
 
 
 def view(session: Session, user_id: int, run_id: int | None = None) -> dict[str, Any]:
@@ -58,6 +66,7 @@ def set_line(
         raise CartError(f"Quantity must be between 0 and {MAX_QUANTITY}.")
     if quantity > product.stock:
         raise CartError(f"Only {product.stock} of {sku} in stock.")
+    _lock_cart(session, user_id)
     line = next((x for x in _lines(session, user_id, run_id) if x.product_id == product.id), None)
     if quantity == 0:
         if line is not None:
@@ -81,6 +90,7 @@ def add_to_line(
     product = get_product(session, sku)
     if product is None:
         raise CartError(f"No product {sku}.")
+    _lock_cart(session, user_id)
     line = next((x for x in _lines(session, user_id, run_id) if x.product_id == product.id), None)
     held = line.quantity if line is not None else 0
     return set_line(session, user_id, sku, held + quantity, run_id)
