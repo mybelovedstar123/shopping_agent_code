@@ -213,3 +213,20 @@ def test_team_declines_rather_than_buy_on_a_requirement_it_cannot_check():
     result, store = shop(request, products)
     assert result["outcome"] == "declined" and store.order is None
     assert "cannot be checked" in result["reason"]
+
+
+def test_two_items_one_listing_fits_are_both_bought():
+    """Never fewer units than requested, even when one listing suits both items."""
+    result, store = shop(
+        "Buy a mug and a white mug. Do not ask me anything.", [mug("A"), mug("B", colour="red")]
+    )
+    assert result["outcome"] == "purchased" and sum(store.order.values()) == 2
+    assert store.order.get("A", 0) >= 1, "the white mug must be bought"
+
+
+def test_two_items_of_one_kind_each_get_their_own_line():
+    result, store = shop(
+        "Buy a red mug and a blue mug. Do not ask me anything.",
+        [mug("R", colour="red"), mug("U", colour="blue")],
+    )
+    assert result["outcome"] == "purchased" and store.order == {"R": 1, "U": 1}

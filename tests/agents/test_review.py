@@ -15,10 +15,12 @@ def lamp(ident="A", price=10.0, in_stock=True, opened=True, **attributes):
 ITEM = Item("lamp", "Lamps", 1, ["colour: red"])
 
 
-def review(lines, records, model=None, **brief_options):
+def review(lines, records, model=None, assign=None, **brief_options):
     items = brief_options.pop("items", [ITEM])
     brief = Brief(request="Buy a red lamp", items=items, **brief_options)
     payload = {"brief": brief.to_dict(), "lines": lines, "records": [r.to_dict() for r in records]}
+    if assign is not None:
+        payload["assign"] = assign
     return ReviewAgent(model).on_cart(payload, Notes())
 
 
@@ -164,3 +166,19 @@ def test_part_that_does_not_fit_the_device_fails_the_cart():
     items = [Item("drill", "Drills"), Item("battery", "Batteries")]
     reply = review({"D": 1, "P": 1}, [device, part], items=items, fits=[{"item": 2, "with": 1}])
     assert not reply["ok"] and reply["ruled_out"] == ["P"]
+
+
+def test_items_of_one_kind_are_each_checked_against_their_own_line():
+    items = [Item("lamp", "Lamps", 1, ["colour: red"]), Item("lamp", "Lamps", 1, ["colour: blue"])]
+    records = [lamp("A", colour="red"), lamp("B", colour="blue")]
+    assert review({"A": 1, "B": 1}, records, items=items)["ok"]
+    assigned = review({"A": 1, "B": 1}, records, items=items, assign={"0": "A", "1": "B"})
+    assert assigned["ok"]
+
+
+def test_a_line_shared_by_two_items_must_hold_both_quantities():
+    items = [Item("lamp", "Lamps", 1), Item("lamp", "Lamps", 1, ["colour: red"])]
+    records = [lamp("A", colour="red")]
+    short = review({"A": 1}, records, items=items, assign={"0": "A", "1": "A"})
+    assert not short["ok"] and "A is held at 1, lamp and lamp wants 2" in short["problems"]
+    assert review({"A": 2}, records, items=items, assign={"0": "A", "1": "A"})["ok"]

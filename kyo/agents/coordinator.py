@@ -192,7 +192,7 @@ class _Episode:
             picks, missing = self.choose_all()
             if missing:
                 return self.decline(f"no listing fits: {', '.join(missing)}")
-            lines = {pick: self.brief.items[n].quantity for n, pick in picks.items()}
+            lines = self.lines_for(picks)
             if self.over_total_budget(lines) and not self.cheapest_all:
                 self.cheapest_all = True
                 continue
@@ -205,7 +205,7 @@ class _Episode:
                 continue
             if self.changed_requirements(notes):
                 continue
-            verdict = self.review(lines)
+            verdict = self.review(lines, picks)
             if not verdict["ok"]:
                 reason = "; ".join(verdict["problems"]) or reason
                 if not self.handle_problems(lines, verdict):
@@ -230,22 +230,33 @@ class _Episode:
             return False
         return sum(prices[i] * n for i, n in lines.items()) > budget + 1e-9
 
+    def lines_for(self, picks: dict[int, str]) -> dict[str, int]:
+        """Cart lines for the picks. Items sharing a listing add up their quantities."""
+        lines: dict[str, int] = {}
+        for number, pick in picks.items():
+            lines[pick] = lines.get(pick, 0) + self.brief.items[number].quantity
+        return lines
+
     def choose_all(self) -> tuple[dict[int, str], list[str]]:
+        """Choose for every item, giving each its own listing when one fits."""
         picks: dict[int, str] = {}
         missing: list[str] = []
         for number, item in enumerate(self.brief.items):
-            choice = self.choose(number)
+            taken = set(picks.values())
+            choice = self.choose(number, taken)
+            if choice is None and taken:
+                choice = self.choose(number)
             if choice is None:
                 missing.append(item.name)
             else:
                 picks[number] = choice
         return picks, missing
 
-    def choose(self, number: int) -> str | None:
+    def choose(self, number: int, avoid: set[str] | None = None) -> str | None:
         """Choose for one item, reading listings and widening the search as needed."""
         widened = 0
         while True:
-            reply = self.select(number)
+            reply = self.select(number, avoid or set())
             if reply["need_open"]:
                 if self.open_listings(reply["need_open"][:READ_BATCH]):
                     continue
@@ -266,7 +277,7 @@ class _Episode:
         else:
             self.search(number, 3, terms=item.name.split()[-1])
 
-    def select(self, number: int) -> dict[str, Any]:
+    def select(self, number: int, avoid: set[str]) -> dict[str, Any]:
         item = self.brief.items[number]
         records = self.ask("catalog", "records", {"item": item.to_dict()})["records"]
         pick = "cheapest" if self.cheapest_all else self.brief.pick
@@ -283,7 +294,7 @@ class _Episode:
                 "pick_measure": self.brief.pick_measure,
                 "budget": budget,
                 "budget_scope": self.brief.budget_scope,
-                "excluded": sorted(self.excluded),
+                "excluded": sorted(self.excluded | avoid),
                 "in_stock_only": self.brief.in_stock_only,
                 "wishes": self.brief.wishes,
                 "unverified": self.brief.lookups,
@@ -320,7 +331,7 @@ class _Episode:
         gone = {r["id"] for r in records if not r["in_stock"]}
         return gone or (set(lines) if len(lines) == 1 else set())
 
-    def review(self, lines: dict[str, int]) -> dict[str, Any]:
+    def review(self, lines: dict[str, int], picks: dict[int, str]) -> dict[str, Any]:
         if self.brief.pick != "any" or self.left() > len(lines) + self.reserve():
             tool = self.read_tool()
             if tool and self.left() > len(lines) + 2:
@@ -333,7 +344,7 @@ class _Episode:
         verdict = self.ask(
             "review",
             "cart",
-            {"brief": self.brief.to_dict(), "lines": lines, "records": records},
+            {"brief": self.brief.to_dict(), "lines": lines, "records": records, "assign": picks},
         )
         self.model_reviews.append(verdict["model_review"])
         return verdict
@@ -451,12 +462,13 @@ class _Episode:
         fits = {k: [i for i in v if i not in self.excluded] for k, v in verdict["fits"].items()}
         if len([k for k, v in fits.items() if v]) < len(self.brief.items) or self.buys_refused:
             return None
-        lines = {fits[str(n)][0]: i.quantity for n, i in enumerate(self.brief.items, 1)}
+        picks = {n: fits[str(n + 1)][0] for n in range(len(self.brief.items))}
+        lines = self.lines_for(picks)
         if self.over_total_budget(lines):
             return None
         if not self.set_cart(lines).get("ok"):
             return None
-        verdict = self.review(lines)
+        verdict = self.review(lines, picks)
         if not verdict["ok"]:
             self.clear_cart()
             return None
