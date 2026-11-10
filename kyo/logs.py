@@ -14,7 +14,9 @@ from fastapi import Request
 
 LOGGER = "kyo"
 _STANDARD = set(logging.makeLogRecord({}).__dict__) | {"message", "asctime", "taskName"}
-_CARD_LIKE = re.compile(r"\b(?:\d[ -]?){12,19}\b")
+# 12 to 19 digits with any whitespace or dashes between them: whatever the payment simulator
+# would take as a card number.
+_CARD_LIKE = re.compile(r"\b\d(?:[\s-]*\d){11,18}\b")
 
 log = logging.getLogger(LOGGER)
 

@@ -10,6 +10,7 @@ from sqlalchemy import select
 from webutil import post_form, register, text_of
 
 from kyo.logs import JsonFormatter, log, scrub
+from kyo.store import payments
 from kyo.store.db import transaction
 from kyo.store.models import Product
 
@@ -69,6 +70,15 @@ def buy(client, app):
 )
 def test_scrub_masks_card_numbers(text):
     assert "4242" not in scrub(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["4242  4242  4242  4242", "4242\t4242\t4242\t4242", "4242 - 4242 - 4242 - 4242", "42 " * 8],
+)
+def test_scrub_masks_every_spacing_the_payment_simulator_accepts(text):
+    assert payments.charge(text, 100).last4 == "4242"
+    assert "4242" not in scrub(f"my card is {text} thanks")
 
 
 def test_scrub_leaves_ordinary_numbers(text="order 12345 for 2 mugs"):
