@@ -16,6 +16,7 @@ HEAVY_ROOM = 0.02
 WAITS = (4, 10, 20, 35)
 WAIT_TOTAL = 45
 SHOW_CHARS = 450
+STOCK_OUT = '^(?:no|none|false|0|n)$|out[ _-]?of[ _-]?stock|sold[ _-]?out|unavailable|not[ _-]?available'
 OBS_LIMIT = 15000
 HISTORY_LIMIT = 150000
 GATE_ROUNDS = 3
@@ -931,6 +932,8 @@ class Kyo:
         if self.sold_out(ident):
             return False
         value = (self.rows.get(ident) or {}).get(self.stock_key) if self.stock_key else None
+        if isinstance(value, str) and re.search(STOCK_OUT, value.strip(), re.I):
+            return False
         return not (value is False or (isinstance(value, (int, float)) and (not isinstance(value, bool)) and (value <= 0)))
 
     def records_in(self, observation: Any) -> list[tuple[str, dict[str, Any]]]:
