@@ -22,7 +22,9 @@ SHOW_CHARS = 450
 ENV_GAP = 0.25
 TABLE_KEYS = 18
 CRASH_TURNS = 3
+SHORT_KEEP = 8
 STOCK_OUT = '^(?:no|none|false|0|n)$|out[ _-]?of[ _-]?stock|sold[ _-]?out|unavailable|not[ _-]?available'
+TITLE_CHARS = 200
 TEXT_CHARS = 3000
 OBS_LIMIT = 15000
 HISTORY_LIMIT = 150000
@@ -662,6 +664,20 @@ def _fact_block(node: Any) -> dict[str, Any] | None:
                 best = scalars
     return best
 
+def _soft(fallback: Any) -> Any:
+    """A method that adds to the episode but is not needed for it: if it fails, the trace says so and the episode goes on."""
+
+    def wrap(method: Any) -> Any:
+
+        def guarded(self: Any, *args: Any, **kwargs: Any) -> Any:
+            try:
+                return method(self, *args, **kwargs)
+            except Exception as exc:
+                self.trace.append({'kind': 'soft_crash', 'where': method.__name__, 'error': f'{type(exc).__name__}: {exc}'[:300]})
+                return fallback() if callable(fallback) else fallback
+        return guarded
+    return wrap
+
 class _Stamped(list):
     """A trace whose entries say when they happened."""
 
@@ -796,6 +812,8 @@ class Kyo:
         self.row_keys: set[str] = set()
         self.env_at = 0.0
         self.bare_pages: dict[str, int] = {}
+        self.code_tries: list[bool] = []
+        self.codes_dead = False
         self.page_args: dict[str, str] = {}
         self.page_queries: dict[str, set[str]] = {}
 
@@ -818,6 +836,27 @@ class Kyo:
 
     def cart_mark(self) -> str:
         return _dump(sorted(self.cart_lines.items()))
+
+    def row_ids(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+        """A listing tool called with a code that one seen row's title holds gets that row's id; anything else stays as it was sent."""
+        if name not in {self.roles.get(job) for job in ('open', 'offer', 'compare', 'cart')} or not self.rows:
+            return args
+        title = self.title_key()
+        if not title:
+            return args
+
+        props = (self.schemas.get(name) or {}).get('properties') or {}
+
+        def known(value: Any, key: str) -> Any:
+            if not isinstance(value, str) or value.strip() in self.rows or not 3 <= len(value.strip()) <= 30 or not re.search('\\d', value) or 'enum' in (props.get(key) or {}):
+                return value
+            pattern = '(?<![a-z0-9])' + re.escape(value.strip().lower()) + '(?![a-z0-9])'
+            hits = [i for i, row in self.rows.items() if re.search(pattern, str(row.get(title) or '').lower())]
+            if len(hits) == 1:
+                self.trace.append({'kind': 'row_id', 'sent': value, 'id': hits[0]})
+                return hits[0]
+            return value
+        return {key: [known(v, key) for v in value] if isinstance(value, list) else known(value, key) for key, value in args.items()}
 
     def page_tools(self) -> set[str]:
         page = self.roles.get('offer') or self.roles.get('open')
@@ -1668,6 +1707,25 @@ class Kyo:
             picks += [i for i in pool[:2] if i not in picks]
         return self.fill_facts(picks[:CHEAPER_OPENS], self.tail() + 4)
 
+    def title_key(self) -> str | None:
+        """The row key holding a listing's name: of the short texts most rows carry and few rows share, with more than one word
+        on average and about as many different values as any such key has (a seller's name repeats where a listing's does not),
+        the shortest."""
+        cat_key = self.category_key()
+        totals: dict[str, list[Any]] = {}
+        for row in self.rows.values():
+            for key, value in row.items():
+                if key != cat_key and isinstance(value, str) and len(value) <= TITLE_CHARS:
+                    slot = totals.setdefault(key, [0, 0, 0, set()])
+                    slot[0] += len(value.split())
+                    slot[1] += 1
+                    slot[2] += len(value)
+                    slot[3].add(value)
+        kept = [(slot[2] / slot[1], key, len(slot[3])) for key, slot in totals.items() if slot[1] * 5 >= len(self.rows) * 4 and slot[0] >= slot[1] * 2 and len(slot[3]) * 2 >= slot[1]]
+        most = max((distinct for _, _, distinct in kept), default=0)
+        ranked = [(mean, key) for mean, key, distinct in kept if distinct * 10 >= most * 9]
+        return min(ranked)[1] if ranked else None
+
     def call_mark(self, name: str, args: dict[str, Any]) -> str:
         """One spelling per call: words in any case and spacing, a number at its first value left out."""
         props = (self.schemas.get(name) or {}).get('properties') or {}
@@ -1696,6 +1754,93 @@ class Kyo:
         fresh = mark not in seen
         seen.add(mark)
         return fresh
+
+    @_soft('')
+    def last_page_first(self, name: str, args: dict[str, Any], observation: Any) -> str:
+        """A new search that opened on a later page shows few rows and no next page, which reads as all there is: race 15's models
+        asked the browse tool for its highest page in 1716 of 2845 calls, seeing 7 of 342 rows and "next: none". When such a call
+        reports more rows than it shows, the same call at the lowest value of its numeric argument tells: rows with other ids,
+        at least as many, mean that argument is the page."""
+        if name in self.page_args or not isinstance(observation, dict):
+            return ''
+        props = (self.schemas.get(name) or {}).get('properties') or {}
+        numeric = [k for k, v in args.items() if isinstance(v, int) and not isinstance(v, bool) and k in props and v > (props[k].get('minimum') if isinstance(props[k].get('minimum'), int) else 1)]
+        if len(numeric) != 1 or self.left() <= self.tail() + 4:
+            return ''
+        shape = self.read_shape(name, observation)
+        if not shape or not shape.get('count') or shape.get('next') is None or observation.get(shape['next']) is not None:
+            return ''
+        rows = observation.get(shape['rows'])
+        count = observation.get(shape['count'])
+        if not isinstance(rows, list) or not isinstance(count, int) or count <= len(rows):
+            return ''
+        key = numeric[0]
+        low = props[key].get('minimum') if isinstance(props[key].get('minimum'), int) else 1
+        faults: list[str] = []
+        call = _shape({**args, key: low}, self.schemas.get(name), 'args', faults)
+        if faults:
+            return ''
+        reply = self.act(name, call)
+        if reply is None:
+            return ''
+        seen = reply.get('observation')
+        self.observe(name, seen)
+        new = seen.get(shape['rows']) if isinstance(seen, dict) else None
+        if not isinstance(new, list) or len(new) < len(rows) or {i for i, _ in self.records_in(seen)} & {i for i, _ in self.records_in(observation)}:
+            return ''
+        self.page_args[name] = key
+        self.trace.append({'kind': 'page_arg', 'tool': name, 'arg': key})
+        return f'\n[Kyo] {key} is the page number of this search: the call above showed its last page. Page {low} of the same search:\n' + self.show(seen)
+
+    @_soft(False)
+    def names_code(self, args: dict[str, Any]) -> bool:
+        """Whether a search names a model or part code some listing's text gave as a code."""
+        said = {c for v in args.values() if isinstance(v, str) for c in _codes(v)}
+        if not said:
+            return False
+        known: set[str] = set()
+        for mark in self.fit_index()['marks'].values():
+            known.update(mark.get('codes') or [])
+            known.update(mark.get('works') or [])
+        return bool(said & known)
+
+    def first_look(self, name: str, args: dict[str, Any], fresh: bool) -> dict[str, Any]:
+        """A new search starts on its first page once the tool's page argument is known."""
+        key = self.page_args.get(name)
+        if not key or not fresh or not isinstance(args.get(key), int):
+            return args
+        props = (self.schemas.get(name) or {}).get('properties') or {}
+        low = props.get(key, {}).get('minimum') if isinstance(props.get(key, {}).get('minimum'), int) else 1
+        return {**args, key: low}
+
+    @_soft('')
+    def shorter_search(self, name: str, args: dict[str, Any], observation: Any) -> str:
+        """A long words search that found nothing is run again with its first words, no model turn needed. Race 15: 54% of
+        six-word queries and 42% of five-word ones came back empty (search wants every word), 10% of one-word ones."""
+        plan = self.value_template()
+        if not plan or plan[0] != name or self.left() <= self.tail() + SHORT_KEEP or self.finished or not isinstance(observation, dict):
+            return ''
+        field = plan[2]
+        text = args.get(field)
+        if not isinstance(text, str) or self.records_in(observation) or len(text.split()) < 3:
+            return ''
+        for value in observation.values():
+            if (isinstance(value, (list, str)) and value) or (isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0):
+                return ''
+        short = ' '.join([w for w in text.split() if not _codes(w)][:2])
+        if not short:
+            return ''
+        faults: list[str] = []
+        call = _shape({k: v for k, v in {**args, field: short}.items() if isinstance(v, bool) or not isinstance(v, int)}, self.schemas.get(name), 'args', faults)
+        if faults:
+            return ''
+        reply = self.act(name, call)
+        if reply is None:
+            return ''
+        seen = reply.get('observation')
+        self.observe(name, seen)
+        self.trace.append({'kind': 'shorter', 'from': text, 'to': short, 'rows': len(self.records_in(seen))})
+        return f'\n[Kyo] Nothing has all those words; the same search with {short!r} shows:\n' + self.show(seen)
 
     def observe(self, name: str, observation: Any) -> str:
         self.absorb(observation)
@@ -3295,11 +3440,21 @@ class Kyo:
                     out.append((cid, f'Not run (no step used): {absent[0]} is not in the cart, so there is nothing to take off. Cart now: ' + self.cart_text()))
                     continue
             ending = self.is_buy(name, args) or self.is_refuse(name, args)
+            plain_jobs = {tool for job, tool in self.roles.items() if job != 'search'}
             if ending and len(calls) > 1:
                 out.append((cid, 'Not run (no step used): send the finishing call on its own, after reading your other results.'))
                 continue
             if not ending and self.left() <= self.tail() and (self.roles.get('buy') or self.roles.get('refuse')):
                 out.append((cid, "Not run (no step used): the last steps are kept for checking out (with the shopper's approval of the basket when it is due) or ending without a purchase."))
+                continue
+            fresh = name not in plain_jobs and self.query_is_new(name, args)
+            asked_for = args
+            args = self.first_look(name, args, fresh)
+            if args != asked_for:
+                trimmed += f"\n[Kyo] This is a new search, so Kyo asked for its first page ({_dump(asked_for)} was the call you sent)."
+            args = self.row_ids(name, args)
+            if name == self.roles.get('search') and self.codes_dead and self.names_code(args):
+                out.append((cid, 'Not run (no step used): this store\'s search found nothing for a model or part code. Search by words and values, list the category, and read the codes on the rows.'))
                 continue
             mark = name + _dump(args)
             if not ending and name != self.roles.get('cart') and (mark in self.recent):
@@ -3451,6 +3606,8 @@ class Kyo:
                 self.note_view(name, observation)
             plain = {tool for job, tool in self.roles.items() if job != 'search'}
             paged = self.more_pages(name, args, observation) if name not in plain and (not ending) else ''
+            paged += self.last_page_first(name, args, observation) if fresh and (not ending) else ''
+            paged += self.shorter_search(name, args, observation) if name not in plain and (not ending) else ''
             if self.single_target(name) and name not in (self.roles.get('cart'), self.roles.get('buy'), self.roles.get('refuse'), self.roles.get('ask')):
                 listing = self.ident(observation) if isinstance(observation, dict) else None
                 if listing:
@@ -3477,6 +3634,9 @@ class Kyo:
                 lines = [i for i in self.cart_ids() if not self.sold_out(i) and i not in self.dropped]
                 if len(lines) >= len(self.built):
                     self.built = lines
+            if name == self.roles.get('search') and self.names_code(args):
+                self.code_tries.append(bool(self.records_in(observation)))
+                self.codes_dead = len(self.code_tries) >= 2 and not any(self.code_tries)
             if name == self.roles.get('search') and self.records_in(observation):
                 self.searched = (self.searched + [dict(args)])[-8:]
             if name == self.roles.get('cart_view'):
