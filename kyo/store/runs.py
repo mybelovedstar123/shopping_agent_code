@@ -328,14 +328,14 @@ def decide_approval(
             question.answer = "declined"
             question.answered_at = now()
         return {"approved": False}
-    key = f"run-{run_id}-question-{question_id}"
     try:
         with transaction(sessions) as session:
+            # No idempotency key: closing the question is what stops a repeat buying twice, and a
+            # predictable key could be claimed first by the shopper's own checkout.
             order = checkout.place_order(
                 session,
                 user_id,
                 card_number,
-                idempotency_key=key,
                 run_id=run_id,
                 expected_total_cents=total,
             )

@@ -126,6 +126,21 @@ def test_purchase_happens_only_after_approving_the_exact_cart(client, app):
     assert stock(app, "M1") == 2
 
 
+def test_the_shoppers_own_checkout_key_cannot_stand_in_for_an_approval(client, app):
+    run_id = start(client, f"Buy a red mug. {NO_QUESTIONS}")
+    question = open_question(wait_until(client, run_id, awaiting("approval")), "approval")
+    client.put("/api/cart/M2", json={"quantity": 1})
+    key = f"run-{run_id}-question-{question['id']}"
+    own = client.post("/api/checkout", json={"card_number": GOOD}, headers={"Idempotency-Key": key})
+    assert own.status_code == 201
+    decision = approve(client, run_id).json()
+    assert decision["approved"] is True and decision["order"]["id"] != own.json()["id"]
+    assert decision["order"]["from_assistant"] is True
+    assert [line["id"] for line in decision["order"]["lines"]] == ["M1"]
+    run = finished(client, run_id)
+    assert run["result"]["order_id"] == decision["order"]["id"] and stock(app, "M1") == 2
+
+
 def test_refusing_means_no_order_and_an_empty_run_cart(client, app):
     run_id = start(client, f"Buy a red mug. {NO_QUESTIONS}")
     approve(client, run_id, approved=False)
