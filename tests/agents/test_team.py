@@ -426,3 +426,9 @@ def test_an_approval_worded_with_no_problem_is_approval():
         answers={"May I place": "Yes, no problem."},
     )
     assert store.order == {"L1": 1}
+
+
+def test_a_budget_over_a_thousand_dollars_is_read_whole():
+    chair = Product("C", "Chair C", "Office Chairs", 350.0, {"colour": "black"})
+    result, store = shop("Buy a black office chair under $1,200. Do not ask me anything.", [chair])
+    assert result["outcome"] == "purchased" and store.order == {"C": 1}

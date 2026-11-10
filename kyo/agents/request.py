@@ -129,10 +129,11 @@ def read_money(text: str) -> tuple[float | None, str, bool]:
         r"|no more than|up to|within|maximum of"
         r"|max|budget of|budget is|spend(?:ing)?(?: at most)?|cost(?:ing)? (?:at most|under))\s*)"
     )
+    amount = r"(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)"  # "1,200" is one amount
     patterns = (
-        rf"{limit}?\$\s*(\d+(?:\.\d+)?)",
-        rf"{limit}?(\d+(?:\.\d+)?)\s*(?:dollars?|usd|bucks?)\b",
-        r"budget(?: of| is)?\s*(\d+(?:\.\d+)?)",
+        rf"{limit}?\$\s*{amount}",
+        rf"{limit}?{amount}\s*(?:dollars?|usd|bucks?)\b",
+        rf"budget(?: of| is)?\s*{amount}",
     )
     for pattern in patterns:
         match = re.search(pattern, text, re.I)
@@ -144,17 +145,21 @@ def read_money(text: str) -> tuple[float | None, str, bool]:
                     rf"\b{PER_ITEM}\s*(?:costing|at|for)?\s*$", text[: match.start()], re.I
                 )
             )
-            return float(match.group(1)), text[: match.start()] + " " + text[match.end() :], each
+            budget = float(match.group(1).replace(",", ""))
+            return budget, text[: match.start()] + " " + text[match.end() :], each
     return None, text, False
 
 
 def _pick(text: str) -> tuple[str, str]:
     if re.search(r"cheapest|lowest price|least expensive|best price|lowest cost", text, re.I):
         return "cheapest", ""
-    match = re.search(r"\b(most|highest|largest|biggest)\s+([a-z]+(?: [a-z]+)?)", text, re.I)
+    # "at most" and "at least" set limits, not pick rules.
+    match = re.search(
+        r"(?<!at )\b(most|highest|largest|biggest)\s+([a-z]+(?: [a-z]+)?)", text, re.I
+    )
     if match and match.group(2).split()[0].lower() != "expensive":
         return "most", match.group(2)
-    match = re.search(r"\b(least|lowest|smallest|lightest)\s+([a-z]+)", text, re.I)
+    match = re.search(r"(?<!at )\b(least|lowest|smallest|lightest)\s+([a-z]+)", text, re.I)
     if match:
         return "least", "weight" if match.group(1).lower() == "lightest" else match.group(2)
     return "any", ""

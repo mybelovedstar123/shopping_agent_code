@@ -69,6 +69,22 @@ def test_a_measurement_is_not_a_budget():
     assert brief.items[0].name == "desk lamp"
 
 
+def test_a_budget_with_a_thousands_separator_is_one_amount():
+    brief = parse("Buy a black office chair under $1,200.")
+    assert brief.budget == 1200 and brief.items[0].name == "office chair"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Buy a red desk lamp, at most twenty dollars.",
+        "Buy a desk lamp with at least three settings.",
+    ],
+)
+def test_at_most_and_at_least_are_not_pick_rules(text):
+    assert parse(text).pick == "any"
+
+
 def test_budget_scope_each():
     assert parse("Buy 2 mugs under $5 each.").budget_scope == "each"
     assert parse("Buy 2 mugs under $5.").budget_scope == "total"
