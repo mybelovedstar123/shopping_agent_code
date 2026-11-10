@@ -2235,7 +2235,7 @@ class Kyo:
                     break
                 faults: list[str] = []
                 args = _shape({**base, field: query}, self.schemas.get(tool), 'args', faults)
-                if faults:
+                if faults or self.call_mark(tool, args) in self.read_calls:
                     continue
                 reply = self.act(tool, args)
                 spent += 1

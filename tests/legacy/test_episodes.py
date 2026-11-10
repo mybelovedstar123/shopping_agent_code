@@ -117,3 +117,9 @@ def test_exception_in_a_turn_is_recorded_and_the_episode_goes_on(play, monkeypat
     )
     assert [e["error"] for e in trace if e["kind"] == "crash"] == ["RuntimeError: boom"]
     assert harness.store_calls[-1] == "buy"
+
+
+def test_search_before_declining_skips_a_search_already_made(play):
+    _, harness = play([("find", {"q": "lamp"}), ("decline", {}), ("decline", {})])
+    assert harness.store_actions.count(("find", {"q": "lamp"})) == 1
+    assert harness.store_calls[-1] == "decline"
