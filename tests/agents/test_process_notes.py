@@ -122,6 +122,15 @@ def test_step_the_model_says_is_missing_blocks_the_ending():
     assert not reply["proceed"] and reply["not_done"] == ["get approval"]
 
 
+def test_model_cannot_use_a_tool_the_steps_were_not_given():
+    model = ScriptedModel(
+        [{"steps": [], "call": {"tool": "update_cart", "args": {"product_id": "A", "quantity": 3}}}]
+    )
+    reply, asked = perform(ProcessAgent(model), ["Yes"])
+    assert [a["name"] for a in asked] == ["ask"], "the cart must not be touched"
+    assert reply["proceed"] and asked[0]["args"]["message"].startswith("May I place")
+
+
 def test_rules_take_over_when_the_model_fails():
     reply, asked = perform(ProcessAgent(ScriptedModel([ModelError("down")])), ["Yes"])
     assert reply["proceed"] and asked[0]["args"]["message"].startswith("May I place")

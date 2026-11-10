@@ -271,3 +271,41 @@ def test_the_reported_total_uses_the_price_read_before_checkout():
     store = PriceRiseStore([lamp("L1", 20)], "L1", 21.0)
     result = run_team("Buy a red desk lamp under $22. Do not ask me anything.", store, max_steps=6)
     assert store.order == {"L1": 1} and result["total"] == 21.0
+
+
+def test_the_process_steps_cannot_change_the_reviewed_cart():
+    brief = {
+        "items": [{"name": "desk lamp", "shelf": "Desk Lamps", "musts": ["colour: red"]}],
+        "budget": 25,
+        "messages": 1,
+        "process": [{"step": "get the shopper's approval", "when": "order", "messages": 1}],
+        "roles": {
+            "search": "search_products",
+            "open": "get_product",
+            "cart": "update_cart",
+            "buy": "checkout",
+            "refuse": "decline_purchase",
+            "ask": "ask_shopper",
+        },
+    }
+    gate = {
+        "steps": [],
+        "call": {"tool": "update_cart", "args": {"product_id": "L1", "quantity": 3}},
+    }
+
+    def reply(prompt):
+        if prompt.startswith("You prepare a shopping task"):
+            return brief
+        if prompt.startswith("A shopping agent is about to"):
+            return gate
+        if prompt.startswith("You choose the questions"):
+            return {"ask": []}
+        return {"ok": True}
+
+    store = ScenarioStore([lamp("L1")], answers={"May I place": "Yes, go ahead."})
+    result = run_team(
+        "Buy a red desk lamp under $25. Get my approval before ordering.",
+        store,
+        model=ScriptedModel(reply),
+    )
+    assert store.order == {"L1": 1} and result["lines"] == {"L1": 1}

@@ -379,7 +379,11 @@ class _Episode:
         return {"lines": lines, "total": total}
 
     def perform(self, stage: str, lines: dict[str, int] | None) -> dict[str, Any]:
+        """Have the process agent do the request's steps. It gets no tool that changes the
+        cart or ends the episode, so the reviewed cart is the one checked out."""
         tool = self.tool("ask")
+        locked = {self.tool(role) for role in ("cart", "buy", "refuse")} - {None}
+        tools = [t for t in self.tools if t["function"]["name"] not in locked]
         return self.ask(
             "process",
             "perform",
@@ -390,7 +394,7 @@ class _Episode:
                 "ask_tool": tool,
                 "ask_schema": self.schemas.get(tool or "", {}),
                 "request": self.brief.request,
-                "tools": self.tools,
+                "tools": tools,
             },
         )
 

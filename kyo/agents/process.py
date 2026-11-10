@@ -152,6 +152,10 @@ class ProcessAgent(Agent):
                     "not_done": missing,
                 }
             name, args = str(call.get("tool") or ""), call.get("args") or {}
+            allowed = {t["function"]["name"] for t in payload.get("tools") or []}
+            if name not in allowed | {payload.get("ask_tool")}:
+                context.note(f"the model asked for {name or 'no tool'}, which steps may not use")
+                return None
             reply = context.request("gateway", "call", {"name": name, "args": args})
             if not reply.get("ok"):
                 return None
