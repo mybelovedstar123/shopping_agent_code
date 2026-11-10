@@ -361,3 +361,21 @@ def test_malformed_model_replies_never_end_the_run(replies):
     store = ScenarioStore([lamp("L1", finish="matte"), lamp("L2", finish="matte")])
     result = run_team("Buy a red desk lamp.", store, model=ScriptedModel(reply))
     assert result["outcome"] in ("purchased", "declined")
+
+
+class FlakyStore(ScenarioStore):
+    """Fails the first product page it is asked for."""
+
+    failed = False
+
+    def _get_product(self, args):
+        if not self.failed:
+            self.failed = True
+            raise ConnectionError("database is locked")
+        return super()._get_product(args)
+
+
+def test_one_store_failure_does_not_end_the_run():
+    store = FlakyStore([lamp("L1")])
+    result = run_team("Buy a red desk lamp. Do not ask me anything.", store)
+    assert result["outcome"] == "purchased" and store.order == {"L1": 1}
