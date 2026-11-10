@@ -2352,7 +2352,8 @@ class Kyo:
             return str((self.rows.get(ident) or {}).get(cat_key) or '').strip().lower() if cat_key else ident
         plan: dict[str, int] = {}
         for number, ids in self.lead_items.items():
-            index = _count(number)
+            found = re.search('\\d+', str(number))
+            index = int(found.group()) if found else (1 if len(self.items) == 1 else None)
             pick = next((i for i in ids if not self.sold_out(i)), None)
             if pick and index and (1 <= index <= len(self.items)) and (kind(pick) not in {kind(p) for p in plan}):
                 plan[pick] = self.items[index - 1].qty
